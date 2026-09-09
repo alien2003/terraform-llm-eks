@@ -59,8 +59,21 @@ require_cmd aws
 # The CLI reads its own configuration; this script never opens it (workspace rules, Rule 1).
 # `aws configure list-profiles` returns profile names only, no credential material,
 # and it is what separates "the block is commented out" from "the role is missing".
+#
+# Guard first on the CLI seeing NO profiles at all. That is not a real state of any
+# configured machine, and it is what the command sandbox produces: ~/.aws is on its
+# read deny list, so `aws configure list-profiles` exits 0 and prints nothing. Without
+# this guard the admin branch below reports a correctly-uncommented profile as absent
+# and calls that "the expected state", which is a reassuring lie told at the first
+# pre-flight command of a cloud window. Zero profiles is distinguishable and
+# impossible, so checking it is free.
+all_profiles="$(command aws configure list-profiles 2>/dev/null || true)"
+if [ -z "$all_profiles" ]; then
+  die "the AWS CLI can see no profiles at all, which means it cannot read its own configuration rather than that no profile exists. On this machine that is the command sandbox: ~/.aws is not readable inside it. Re-run this with the sandbox disabled. Nothing about the profile blocks has been established either way."
+fi
+
 profile_known=0
-if command aws configure list-profiles 2>/dev/null | grep -Fxq -- "$profile"; then
+if printf '%s\n' "$all_profiles" | grep -Fxq -- "$profile"; then
   profile_known=1
 fi
 

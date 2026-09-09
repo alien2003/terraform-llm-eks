@@ -314,17 +314,23 @@ if run_ro sns get-topic-attributes --topic-arn "$TOPIC_ARN" --region "$BILLING_R
   check PASS "alert topic" "$ALERT_TOPIC_NAME"
 
   if run_ro sns list-subscriptions-by-topic --topic-arn "$TOPIC_ARN" --region "$BILLING_REGION" --output json; then
+    # Copied out of $RO_OUT before anything else in this block runs another read: the
+    # SMS checks below call run_ro twice more, and every run_ro overwrites $RO_OUT.
+    # The kill Lambda check at the end of the block needs this list, not the sandbox
+    # answer that would otherwise be sitting there.
+    SUBSCRIPTIONS_JSON="$RO_OUT"
+
     # An unconfirmed subscription has the literal string "PendingConfirmation" in
     # place of its ARN, so it is counted rather than trusted. Compare case- and
     # space-insensitively: the API reference spells it "pending confirmation" in one
     # place and PendingConfirmation in another, and a guardrail check should not
     # depend on which.
     # https://docs.aws.amazon.com/cli/latest/reference/sns/subscribe.html
-    total_subs="$(printf '%s' "$RO_OUT" | jq -r '.Subscriptions | length')"
-    pending="$(printf '%s' "$RO_OUT" |
+    total_subs="$(printf '%s' "$SUBSCRIPTIONS_JSON" | jq -r '.Subscriptions | length')"
+    pending="$(printf '%s' "$SUBSCRIPTIONS_JSON" |
       jq -r '[.Subscriptions[] | select((.SubscriptionArn | ascii_downcase | gsub(" ";"")) == "pendingconfirmation")] | length')"
     confirmed=$((total_subs - pending))
-    protocols="$(printf '%s' "$RO_OUT" |
+    protocols="$(printf '%s' "$SUBSCRIPTIONS_JSON" |
       jq -r '[.Subscriptions[] | select((.SubscriptionArn | ascii_downcase | gsub(" ";"")) != "pendingconfirmation") | .Protocol] | sort | unique | join(",")')"
 
     if [ "$confirmed" -eq 0 ]; then
@@ -343,7 +349,7 @@ if run_ro sns get-topic-attributes --topic-arn "$TOPIC_ARN" --region "$BILLING_R
     # numbers that have been added and verified. An unverified number receives nothing
     # and looks healthy from here.
     # https://docs.aws.amazon.com/sns/latest/dg/sns-sms-sandbox.html
-    sms_endpoints="$(printf '%s' "$RO_OUT" |
+    sms_endpoints="$(printf '%s' "$SUBSCRIPTIONS_JSON" |
       jq -r '.Subscriptions[] | select(.Protocol == "sms") | .Endpoint')"
 
     if [ -z "$sms_endpoints" ]; then
@@ -380,7 +386,7 @@ if run_ro sns get-topic-attributes --topic-arn "$TOPIC_ARN" --region "$BILLING_R
 
     # The kill Lambda subscribes to the same topic, which is what makes a spend alert
     # a teardown rather than a notification.
-    if printf '%s' "$RO_OUT" | jq -e --arg fn "$KILL_FUNCTION_NAME" \
+    if printf '%s' "$SUBSCRIPTIONS_JSON" | jq -e --arg fn "$KILL_FUNCTION_NAME" \
          '.Subscriptions[] | select(.Protocol == "lambda") | select(.Endpoint | endswith(":" + $fn))' >/dev/null; then
       check PASS "kill Lambda subscribed" "an alert on $ALERT_TOPIC_NAME triggers a teardown"
     else
