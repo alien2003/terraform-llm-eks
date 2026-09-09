@@ -20,3 +20,7 @@ ignores:
   - "**/.terraform/**"
   - "**/node_modules/**"
   - ".tflint.d/**"
+  # pre-commit's hook-repository cache, redirected into the repo from
+  # ~/.cache/pre-commit by mise.toml so nothing is written outside the workspace.
+  # Upstream hook repositories, gitignored and never committed.
+  - ".pre-commit-cache/**"

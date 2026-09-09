@@ -20,6 +20,12 @@ paths = [
   '''\.terraform/''',
   '''\.tflint\.d/''',
   '''\.git/''',
+  # pre-commit's hook-repository cache. mise.toml redirects PRE_COMMIT_HOME here from
+  # ~/.cache/pre-commit so that nothing is written outside the workspace (Rule 1), which
+  # puts clones of the upstream hook repositories inside the tree. Their test fixtures
+  # contain deliberate example secrets, and their prose is not this project's prose.
+  # Gitignored, never committed, and rebuilt from .pre-commit-config.yaml on demand.
+  '''\.pre-commit-cache/''',
   # The workspace-local kubeconfig scripts/test.sh redirects kind into, so that kind
   # does not write to the author's ~/.kube/config. It is gitignored by test/.gitignore
   # and scripts/test.sh deletes it when it tears its cluster down; it survives only

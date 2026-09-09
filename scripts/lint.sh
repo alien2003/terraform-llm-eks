@@ -258,7 +258,8 @@ if command -v markdownlint-cli2 >/dev/null 2>&1; then
   # vendored Terraform module's README is not this project's prose and its line
   # lengths are not this project's problem.
   step "markdownlint" env -C "$REPO_ROOT" markdownlint-cli2 \
-    '**/*.md' '!**/.terraform/**' '!**/node_modules/**' '!.tflint.d/**'
+    '**/*.md' '!**/.terraform/**' '!**/node_modules/**' '!.tflint.d/**' \
+    '!.pre-commit-cache/**'
 else
   skip "markdownlint" "markdownlint-cli2 not on PATH; run through mise"
 fi
