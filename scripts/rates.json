@@ -42,13 +42,50 @@
     "ClusterIP, no AWS Load Balancer Controller is installed, and nothing in any of the",
     "three stacks creates an elastic load balancer, so pricing one would put a resource",
     "in the estimate that cannot exist. If an ingress is ever added, the line comes back",
-    "with the same treatment as the rest: null until somebody reads the price."
+    "with the same treatment as the rest: null until somebody reads the price.",
+    "",
+    "--- How the figures below were read, 2026-09-10 ---",
+    "",
+    "Everything except the Spot line comes from the AWS Price List Bulk API, which needs",
+    "no credentials. The entry point is",
+    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/index.json, whose offers map",
+    "gives each service a currentRegionIndexUrl; that region index gives the us-east-1",
+    "currentVersionUrl. Each source_url below is the stable /current/us-east-1/index.json",
+    "alias for that service, which redirects to whatever the newest version is, so the URL",
+    "keeps working while the number under it moves. The exact versions read on 2026-09-10",
+    "were AmazonEKS 20260831092157, AmazonVPC 20260831092232, AmazonEC2 20260909164938.",
+    "",
+    "The SKU behind each figure, so the reading can be repeated rather than trusted:",
+    "  eks_control_plane    AmazonEKS ZYWMR684YSMFHWEU, usagetype USE1-AmazonEKS-Hours:perCluster,",
+    "                       tiertype HAStandard, unit Hours. That is the standard-support",
+    "                       cluster hour; the extended-support SKU is a different one",
+    "                       (M7977BSVFGDUJZ67) and this project never reaches it.",
+    "  nat_gateway          AmazonEC2 M2YSHUBETB3JX4M4, productFamily NAT Gateway,",
+    "                       usagetype NatGateway-Hours, 'Hourly charge for NAT Gateways'.",
+    "                       The per-GB SKUs (NatGateway-Bytes, RegionalNatGateway-Bytes) are",
+    "                       the data processing charge and are deliberately not priced here.",
+    "  public_ipv4_address  AmazonVPC 4GQUNXTFWVSGPUZK, usagetype USE1-PublicIPv4:InUseAddress.",
+    "                       The idle-address SKU is separate and does not apply while the",
+    "                       address is attached to a live NAT gateway.",
+    "  system_node          AmazonEC2 NN4EGUUQRWVYP98C, BoxUsage:t3.medium, Linux, Shared",
+    "                       tenancy, preInstalledSw NA, capacitystatus Used, no license.",
+    "  gp3 storage          AmazonEC2 JG3KUJMBRGHV3N8G, EBS:VolumeUsage.gp3, $0.08 per GB-month.",
+    "                       Both EBS lines below divide that by 730 hours per month, the",
+    "                       divisor the AWS Pricing Calculator uses, and multiply by the",
+    "                       volume size this repository provisions.",
+    "  g6.xlarge on demand  AmazonEC2 TPKUC6XYSUQ3VFK2, BoxUsage:g6.xlarge, Linux, Shared",
+    "                       tenancy, no license. Used only as the ceiling under gpu_node; see",
+    "                       the note there.",
+    "",
+    "The two instance figures were cross-checked against the Pricing Calculator feed at",
+    "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/US%20East%20(N.%20Virginia)/Linux/index.json",
+    "which returns the same 0.0416 and 0.8048."
   ],
 
   "schema": 2,
   "currency": "USD",
-  "region": null,
-  "sourced_on": null,
+  "region": "us-east-1",
+  "sourced_on": "2026-09-10",
 
   "line_items": {
     "eks_control_plane": {
@@ -57,9 +94,9 @@
       "max_quantity": 1,
       "ceiling_source": "one aws_eks_cluster in infra/cluster/eks.tf",
       "gpu_only": false,
-      "usd_per_hour": null,
-      "source_url": null,
-      "sourced_on": null
+      "usd_per_hour": 0.1,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEKS/current/us-east-1/index.json",
+      "sourced_on": "2026-09-10"
     },
     "nat_gateway": {
       "description": "NAT gateway, hourly charge only; data processing is per GB and is not estimated here",
@@ -67,9 +104,9 @@
       "max_quantity": 1,
       "ceiling_source": "infra/cluster single_nat_gateway, one_nat_gateway_per_az = false",
       "gpu_only": false,
-      "usd_per_hour": null,
-      "source_url": null,
-      "sourced_on": null
+      "usd_per_hour": 0.045,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-1/index.json",
+      "sourced_on": "2026-09-10"
     },
     "public_ipv4_address": {
       "description": "In-use public IPv4 address hourly charge on the NAT gateway's Elastic IP. A separate hourly dimension from the NAT gateway itself",
@@ -77,9 +114,9 @@
       "max_quantity": 1,
       "ceiling_source": "one Elastic IP, on the single NAT gateway in infra/cluster/vpc.tf",
       "gpu_only": false,
-      "usd_per_hour": null,
-      "source_url": null,
-      "sourced_on": null
+      "usd_per_hour": 0.005,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/current/us-east-1/index.json",
+      "sourced_on": "2026-09-10"
     },
     "system_node": {
       "description": "System managed node group, t3.medium on demand, carrying Karpenter, CoreDNS and monitoring",
@@ -87,9 +124,9 @@
       "max_quantity": 3,
       "ceiling_source": "infra/cluster system_node_group_desired_size 2, system_node_group_max_size 3",
       "gpu_only": false,
-      "usd_per_hour": null,
-      "source_url": null,
-      "sourced_on": null
+      "usd_per_hour": 0.0416,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-1/index.json",
+      "sourced_on": "2026-09-10"
     },
     "system_node_ebs": {
       "description": "Root volume for each system node, gp3, converted from the per GB month price",
@@ -97,9 +134,10 @@
       "max_quantity": 3,
       "ceiling_source": "one volume per system node, so the same ceiling as system_node",
       "gpu_only": false,
-      "usd_per_hour": null,
-      "source_url": null,
-      "sourced_on": null
+      "usd_per_hour": 0.00438356,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-1/index.json",
+      "sourced_on": "2026-09-10",
+      "note": "Per volume, not per GiB. 40 GiB, the default of infra/cluster system_node_disk_size, times $0.08 per GB-month, divided by 730 hours per month: 40 * 0.08 / 730 = 0.004383561..., rounded to eight places. 730 is the divisor the AWS Pricing Calculator uses, and gpu_node_ebs uses the same one."
     },
     "gpu_node": {
       "description": "GPU node, g6.xlarge on Spot. On demand GPU is denied by the boundary and is never priced here",
@@ -107,9 +145,10 @@
       "max_quantity": 2,
       "ceiling_source": "infra/cluster/platform inference_max_replicas 2, whose own description is 'One replica per GPU node'; gpu_nodepool_cpu_limit 8 holds the pool to the same two g6.xlarge",
       "gpu_only": true,
-      "usd_per_hour": null,
-      "source_url": null,
-      "sourced_on": null
+      "usd_per_hour": 0.8048,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-1/index.json",
+      "sourced_on": "2026-09-10",
+      "note": "PLACEHOLDER CEILING, NOT A SPOT PRICE. READ THE REAL ONE BEFORE THE NEXT WINDOW. 0.8048 is the g6.xlarge Linux ON DEMAND rate (AmazonEC2 SKU TPKUC6XYSUQ3VFK2, BoxUsage:g6.xlarge), and source_url points at the on demand feed accordingly. It stands here only because a Spot price for an instance type is never above the on demand price for that type in the same Availability Zone, so an estimate built on it overstates the bill and never understates it. Spot appears in no public pricing feed and could not be read when this file was filled in, because ec2 describe-spot-price-history needs credentials for a role that did not exist yet. Replace this with an actual reading: aws ec2 describe-spot-price-history --instance-types g6.xlarge --product-descriptions 'Linux/UNIX' --availability-zone <az> --max-items 10, which is read only and allowed in LOCAL mode, then set source_url to that command and sourced_on to the day it was run. Until that happens, treat every total this line feeds as an upper bound and not as an expectation."
     },
     "gpu_node_ebs": {
       "description": "Root volume for the GPU node, gp3, converted from the per GB month price",
@@ -117,9 +156,10 @@
       "max_quantity": 2,
       "ceiling_source": "one volume per GPU node, so the same ceiling as gpu_node",
       "gpu_only": true,
-      "usd_per_hour": null,
-      "source_url": null,
-      "sourced_on": null
+      "usd_per_hour": 0.01315068,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-1/index.json",
+      "sourced_on": "2026-09-10",
+      "note": "Per volume, not per GiB. 120 GiB, the default of infra/cluster/platform gpu_node_volume_size and also the volume_max_size_gib ceiling in the operator boundary, times $0.08 per GB-month, divided by the same 730 hours per month used for system_node_ebs: 120 * 0.08 / 730 = 0.013150684..., rounded to eight places."
     }
   }
 }
