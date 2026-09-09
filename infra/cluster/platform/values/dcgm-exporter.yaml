@@ -1,0 +1,34 @@
+# NVIDIA DCGM exporter: per-GPU telemetry as Prometheus metrics.
+#
+# Values verified against the chart's own values.yaml at version 4.8.3 from
+# https://nvidia.github.io/dcgm-exporter/helm-charts. The exporter image is
+# pinned by the chart itself (nvcr.io/nvidia/k8s/dcgm-exporter), so there is no
+# tag to set here.
+#
+# The metric names the GPU dashboard queries come from this chart's default
+# counter set, not from memory. See dashboards/gpu.json and the README.
+
+# The DaemonSet belongs only on accelerator nodes, and has to tolerate the taint
+# the GPU NodePool puts on them.
+nodeSelector:
+  karpenter.k8s.aws/instance-gpu-manufacturer: nvidia
+
+tolerations:
+  - key: "${gpu_taint_key}"
+    operator: Exists
+    effect: NoSchedule
+
+# Scraped by the kube-prometheus-stack Prometheus, which selects ServiceMonitors
+# from every namespace.
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 512Mi

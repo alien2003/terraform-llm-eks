@@ -1,0 +1,16 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# One replica may be unavailable at a time. Karpenter honours this when it drains
+# a node for consolidation, and ignores it when EC2 reclaims the Spot instance,
+# which is the whole reason the deployment has to tolerate being killed.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "llm-eks-inference.name" . }}
+  labels:
+    {{- include "llm-eks-inference.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "llm-eks-inference.selectorLabels" . | nindent 6 }}
+{{- end }}

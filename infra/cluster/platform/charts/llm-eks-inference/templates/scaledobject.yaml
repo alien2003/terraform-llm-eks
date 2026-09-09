@@ -1,0 +1,47 @@
+{{- if .Values.scaledObject.enabled }}
+# Scale the deployment on the vLLM scheduler queue, down to zero.
+#
+# The metric is vllm:num_requests_waiting, a gauge of requests the scheduler has
+# accepted but not yet put in a model execution batch. It is vLLM's own metric
+# name, not a recording rule.
+# https://docs.vllm.ai/en/stable/design/metrics
+#
+# metricType AverageValue makes the threshold a per-replica target, so `threshold:
+# "4"` means "add a replica for every four requests queued", not "for every four
+# requests queued in total".
+#
+# minReplicaCount 0 is what makes the GPU node go away: with no pod requesting
+# nvidia.com/gpu, the GPU NodePool consolidates its last node and the Spot bill
+# stops. Read ADR 0046 before relying on it to come back up on its own.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "llm-eks-inference.name" . }}
+  labels:
+    {{- include "llm-eks-inference.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "llm-eks-inference.name" . }}
+  minReplicaCount: {{ .Values.scaledObject.minReplicaCount }}
+  maxReplicaCount: {{ .Values.scaledObject.maxReplicaCount }}
+  pollingInterval: {{ .Values.scaledObject.pollingInterval }}
+  cooldownPeriod: {{ .Values.scaledObject.cooldownPeriod }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          # A GPU pod costs minutes to start. Scaling down on a momentary dip and
+          # back up again costs far more than holding the replica for five
+          # minutes.
+          stabilizationWindowSeconds: {{ .Values.scaledObject.scaleDownStabilizationSeconds }}
+  triggers:
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: {{ .Values.scaledObject.prometheusAddress | quote }}
+        query: sum(vllm:num_requests_waiting{model_name="{{ .Values.model.id }}"})
+        threshold: {{ .Values.scaledObject.threshold | quote }}
+        activationThreshold: {{ .Values.scaledObject.activationThreshold | quote }}
+{{- end }}

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: llm-eks-nodepools
+description: Karpenter NodePools and EC2NodeClasses for the GPU and general capacity of the llm-eks cluster.
+type: application
+version: 0.1.0
+appVersion: "1.14.1"
+home: https://karpenter.sh/
+sources:
+  - https://karpenter.sh/docs/concepts/nodepools/
+  - https://karpenter.sh/docs/concepts/nodeclasses/

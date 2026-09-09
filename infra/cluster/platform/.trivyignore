@@ -1,0 +1,42 @@
+# trivy config exclusions for infra/cluster/platform.
+#
+# Scoped to this directory on purpose. `mise run lint` runs one `trivy config`
+# per stack with the stack as the working directory, and trivy reads the
+# `.trivyignore` sitting in the working directory, so this file suppresses
+# findings in this module and nowhere else.
+# https://trivy.dev/latest/docs/configuration/filtering/
+#
+# One ID per line, one reason per ID. An entry with no reason is not an accepted
+# risk, it is an unread finding, so do not add one.
+#
+# Nothing else in this module is suppressed, and in particular KSV-0014 is not.
+# That finding, the read-only root filesystem on the vLLM container, was fixed in
+# the chart rather than accepted: both containers of the inference Deployment now
+# set securityContext.readOnlyRootFilesystem, and every path vLLM documents as
+# writable is an emptyDir volume. The README section "trivy: one finding fixed,
+# one accepted" has the paths and their sources.
+
+# KSV-0125, "Restrict container images to trusted registries".
+#
+# Two hits, both in charts/llm-eks-inference/templates/deployment.yaml: the vLLM
+# server image `vllm/vllm-openai` and the weights-staging init container's
+# `amazon/aws-cli`. Neither is on trivy's default trusted-registry list because
+# both are Docker Hub repositories.
+#
+# This is deliberate and it is a decision already recorded: every image this
+# cluster pulls goes through the ECR pull-through cache, and the Docker Hub rule
+# behind it needs a Secrets Manager credential that is filled in by hand inside a
+# cloud window. ADR 0024, docs/adr/0024-ecr-cache-credentials-live-in-a-secret-this-stack-creates.md,
+# is the decision and the two-phase apply it implies.
+#
+# Until that cache is standing, the chart names the upstream repositories, which
+# is what trivy sees. The repository is a chart value in both cases, so pointing
+# them at the cache prefix is a values change and not a template change. Both are
+# pinned by tag, and the vLLM image by digest as well, so what runs cannot change
+# under a retag.
+#
+# Revisit when the pull-through cache is applied with the Docker Hub rule
+# enabled: at that point the images resolve from the account's own ECR registry,
+# this finding disappears on its own, and this entry should be deleted rather
+# than kept.
+KSV-0125

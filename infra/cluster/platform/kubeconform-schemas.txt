@@ -1,0 +1,44 @@
+# kubeconform -schema-location values for the charts in this module.
+#
+# Format: one -schema-location value per line. Blank lines and lines starting
+# with # are ignored. scripts/lint.sh reads this file and turns every remaining
+# line into a -schema-location flag; nothing else parses it.
+#
+# kubeconform tries each location in the order given and the first one that
+# returns a schema wins, so a miss on one line falls through to the next rather
+# than failing. That is why the built-in location comes first and the CRD
+# catalogue second: no custom resource exists in the built-in set, and no core
+# kind exists in the catalogue.
+#
+# Without these lines lint.sh falls back to -ignore-missing-schemas, which
+# validates the core Kubernetes objects and silently skips every custom resource
+# in the three charts. That is the failure this file exists to remove.
+
+# Built-in Kubernetes kinds: Deployment, Service, ServiceAccount,
+# PodDisruptionBudget. This is kubeconform's own default location, which points
+# at the yannh/kubernetes-json-schema mirror of the upstream OpenAPI schemas.
+# https://github.com/yannh/kubeconform
+default
+
+# Custom resources. The datreeio CRDs-catalogue publishes one JSON schema per
+# CRD version, addressed by group, lower-cased kind and API version. This is the
+# templated form kubeconform documents for it.
+# https://github.com/datreeio/CRDs-catalog
+#
+# The six custom resources these charts render, and the file each one resolves
+# to, all confirmed to exist in the catalogue:
+#
+#   karpenter.sh/v1            NodePool           karpenter.sh/nodepool_v1.json
+#   karpenter.k8s.aws/v1       EC2NodeClass       karpenter.k8s.aws/ec2nodeclass_v1.json
+#   keda.sh/v1alpha1           ScaledObject       keda.sh/scaledobject_v1alpha1.json
+#   external-secrets.io/v1     ExternalSecret     external-secrets.io/externalsecret_v1.json
+#   external-secrets.io/v1     ClusterSecretStore external-secrets.io/clustersecretstore_v1.json
+#   monitoring.coreos.com/v1   ServiceMonitor     monitoring.coreos.com/servicemonitor_v1.json
+#
+# These are structural schemas generated from the CRDs, so -strict rejects an
+# unknown field inside spec, which is the whole point of wiring them in. It also
+# means the catalogue's copy of a CRD can lag the chart version this module
+# pins; a validation failure on a field that the pinned CRD does have is a stale
+# catalogue entry, not a broken chart, and the fix is to record it here rather
+# than to reach for -ignore-missing-schemas again.
+https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json

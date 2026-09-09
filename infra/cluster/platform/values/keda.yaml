@@ -1,0 +1,69 @@
+# KEDA: the operator, the metrics API server and the admission webhooks.
+#
+# Values verified against the chart's own values.yaml at version 2.20.2 from
+# https://kedacore.github.io/charts.
+#
+# KEDA is what takes the inference deployment to zero replicas, which is what
+# lets Karpenter consolidate the GPU node away and stop the Spot bill. The
+# ScaledObject itself lives in the llm-eks-inference chart, next to the
+# deployment it scales.
+
+crds:
+  install: true
+
+operator:
+  replicaCount: 1
+
+metricsServer:
+  enabled: true
+  replicaCount: 1
+
+webhooks:
+  enabled: true
+  replicaCount: 1
+
+# The chart takes one nodeSelector for all three deployments. None of them may
+# land on a GPU node: a Spot interruption that took the metrics server with it
+# would stall every ScaledObject in the cluster.
+nodeSelector:
+  "${system_label_key}": "${system_label_value}"
+
+resources:
+  operator:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  metricServer:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  webhooks:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# KEDA's own metrics, scraped by the same Prometheus that answers the
+# ScaledObject's trigger query. Useful when the question is whether the scaler is
+# wrong or the metric is.
+prometheus:
+  metricServer:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  operator:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  webhooks:
+    enabled: true
+    serviceMonitor:
+      enabled: true

@@ -1,0 +1,225 @@
+# vLLM, one replica per accelerator.
+#
+# `replicas` is deliberately absent. KEDA creates a HorizontalPodAutoscaler that
+# owns the replica count, and a Deployment that also declares one fights it on
+# every helm upgrade.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-eks-inference.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-eks-inference.labels" . | nindent 4 }}
+spec:
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "llm-eks-inference.selectorLabels" . | nindent 6 }}
+  strategy:
+    # Recreate, not RollingUpdate. There is one GPU per node and one node per
+    # replica; a surge replica would sit Pending waiting for a second accelerator
+    # that the NodePool limit will not allow.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "llm-eks-inference.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      automountServiceAccountToken: true
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      # A Spot node can go away with two minutes' notice. Karpenter drains it on
+      # the interruption message; this is how long the pod gets to finish the
+      # requests it is holding before it is killed anyway.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.securityContext.runAsGroup }}
+        # fsGroup makes the two emptyDir volumes group-writable by the pod, which
+        # is what lets an unprivileged user stage the weights into one of them.
+        fsGroup: {{ .Values.securityContext.runAsGroup }}
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Stage the weights out of the bucket onto the node's root volume. The
+        # credentials come from EKS Pod Identity, so there is no key here and no
+        # key in the pod. `s3 sync` is restartable, which matters when a Spot node
+        # is replaced halfway through a multi-gigabyte copy.
+        - name: stage-weights
+          image: "{{ .Values.weights.image.repository }}:{{ .Values.weights.image.tag }}"
+          imagePullPolicy: {{ .Values.weights.image.pullPolicy }}
+          env:
+            # Neither the AWS CLI nor the CUDA runtime works without a writable
+            # HOME, and the image's default home belongs to root.
+            - name: HOME
+              value: {{ .Values.securityContext.homeDir | quote }}
+            - name: XDG_CACHE_HOME
+              value: {{ printf "%s/.cache" .Values.securityContext.homeDir | quote }}
+          command:
+            - aws
+          args:
+            - s3
+            - sync
+            - "s3://{{ .Values.weights.bucket }}/{{ .Values.weights.prefix }}"
+            - {{ include "llm-eks-inference.modelPath" . | quote }}
+            - --only-show-errors
+          resources:
+            {{- toYaml .Values.weights.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # The AWS CLI writes nothing outside HOME and /tmp, both of which are
+            # emptyDir volumes here, so its root filesystem can be read-only.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: models
+              mountPath: {{ .Values.model.mountPath }}
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: {{ .Values.securityContext.homeDir }}
+      containers:
+        - name: vllm
+          image: {{ include "llm-eks-inference.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Every directory vLLM documents as writable is pinned into one of the
+          # emptyDir volumes at the bottom of this file, so that with a read-only
+          # root filesystem no default can resolve to a path inside the image.
+          #
+          # HOME and XDG_CACHE_HOME are the two everything else derives from.
+          # HF_HOME defaults to $XDG_CACHE_HOME/huggingface when XDG_CACHE_HOME is
+          # set, so the Hugging Face cache follows without being named:
+          # https://huggingface.co/docs/huggingface_hub/en/package_reference/environment_variables
+          # VLLM_CACHE_ROOT defaults to $XDG_CACHE_HOME/vllm and is set here
+          # anyway, because it is the one directory the torch.compile cache, the
+          # FlashInfer autotune cache, the assets cache and the XLA cache all sit
+          # under, and being explicit is what makes the read-only rootfs provable
+          # rather than incidental:
+          # https://docs.vllm.ai/en/stable/usage/security
+          # https://docs.vllm.ai/en/stable/configuration/env_vars
+          # VLLM_CONFIG_ROOT follows XDG_CONFIG_HOME the same way, same page.
+          #
+          # TORCHINDUCTOR_CACHE_DIR and TRITON_CACHE_DIR are deliberately not set:
+          # vLLM points both at subdirectories of its own compile cache when it
+          # initializes the compiler, so they land under VLLM_CACHE_ROOT.
+          # https://docs.vllm.ai/en/stable/api/vllm/compilation/compiler_interface
+          env:
+            - name: HOME
+              value: {{ .Values.securityContext.homeDir | quote }}
+            - name: XDG_CACHE_HOME
+              value: {{ printf "%s/.cache" .Values.securityContext.homeDir | quote }}
+            - name: XDG_CONFIG_HOME
+              value: {{ printf "%s/.config" .Values.securityContext.homeDir | quote }}
+            - name: VLLM_CACHE_ROOT
+              value: {{ printf "%s/.cache/vllm" .Values.securityContext.homeDir | quote }}
+          # The image's entrypoint is the OpenAI-compatible server; arguments go
+          # straight to it.
+          # https://docs.vllm.ai/en/stable/deployment/docker/
+          args:
+            - --model
+            - {{ include "llm-eks-inference.modelPath" . | quote }}
+            - --served-model-name
+            - {{ .Values.model.id | quote }}
+            - --host
+            - 0.0.0.0
+            - --port
+            - {{ .Values.service.port | quote }}
+            - --max-model-len
+            - {{ .Values.model.maxLen | quote }}
+            - --max-num-seqs
+            - {{ .Values.model.maxNumSeqs | quote }}
+            - --gpu-memory-utilization
+            - {{ .Values.model.gpuMemoryUtilization | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Read-only, like the init container. The four writable paths vLLM
+            # documents are all mounted as emptyDir volumes below, and the three
+            # that a library resolves rather than hard-codes are pinned by an
+            # environment variable above, so nothing the server writes needs the
+            # image to be writable:
+            #
+            #   $XDG_CACHE_HOME   -> the home volume    (VLLM_CACHE_ROOT and the
+            #                                            Hugging Face cache)
+            #   $XDG_CONFIG_HOME  -> the home volume    (VLLM_CONFIG_ROOT)
+            #   the system temp dir -> the tmp volume   (VLLM_RPC_BASE_PATH, and
+            #                                            PyTorch's own inductor
+            #                                            cache at
+            #                                            /tmp/torchinductor_<user>)
+            #   /dev/shm          -> the dshm volume
+            #
+            # https://docs.vllm.ai/en/stable/configuration/env_vars
+            # https://docs.vllm.ai/en/stable/design/debug_vllm_compile
+            #
+            # It is still a chart value rather than a literal: no pod has run yet,
+            # and if a library in the image writes somewhere none of these four
+            # cover, the failure is one value away from being reverted while the
+            # real path is found. That check is item 5 of the platform README's
+            # first-window list.
+            readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          volumeMounts:
+            - name: models
+              mountPath: {{ .Values.model.mountPath }}
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+            - name: home
+              mountPath: {{ .Values.securityContext.homeDir }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # The node's root volume, not a PersistentVolumeClaim. The cluster stack
+        # installs no EBS CSI driver, and a GPU node is thrown away after every
+        # window anyway, so there is nothing a claim would preserve.
+        - name: models
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.sharedMemorySize }}
+        # Writable home for the unprivileged user. Everything vLLM caches lands
+        # here, because VLLM_CACHE_ROOT, VLLM_CONFIG_ROOT and the Hugging Face
+        # cache all resolve under $HOME by way of XDG_CACHE_HOME and
+        # XDG_CONFIG_HOME. The AWS CLI in the init container keeps its config
+        # directory here too.
+        - name: home
+          emptyDir: {}
+        # The system temp directory. vLLM's multi-process frontend puts its IPC
+        # sockets there (VLLM_RPC_BASE_PATH defaults to tempfile.gettempdir()) and
+        # PyTorch's own TorchInductor cache defaults to /tmp/torchinductor_<user>.
+        # https://docs.vllm.ai/en/stable/configuration/env_vars
+        # https://docs.vllm.ai/en/stable/design/debug_vllm_compile
+        - name: tmp
+          emptyDir: {}

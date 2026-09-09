@@ -1,0 +1,42 @@
+# Overrides for the local llm-eks-inference chart.
+#
+# Filled by templatefile() in inference.tf.
+
+serviceAccountName: "${service_account}"
+
+image:
+  repository: "${vllm_image}"
+  tag: "${vllm_image_tag}"
+  digest: "${vllm_image_digest}"
+
+model:
+  id: "${model_id}"
+  maxLen: ${model_max_len}
+  gpuMemoryUtilization: "${gpu_memory_utilization}"
+
+weights:
+  bucket: "${weights_bucket}"
+  prefix: "${model_prefix}"
+  image:
+    repository: "${weights_sync_image}"
+    tag: "${weights_sync_image_tag}"
+
+service:
+  port: ${service_port}
+
+nodeSelector:
+  "${role_label_key}": "${gpu_role_label_value}"
+
+tolerations:
+  - key: "${gpu_taint_key}"
+    operator: Exists
+    effect: NoSchedule
+
+scaledObject:
+  enabled: true
+  minReplicaCount: ${min_replicas}
+  maxReplicaCount: ${max_replicas}
+  cooldownPeriod: ${cooldown_period}
+  prometheusAddress: "${prometheus_address}"
+  threshold: "${queue_threshold}"
+  activationThreshold: "${queue_activation_threshold}"

@@ -1,0 +1,22 @@
+# markdownlint configuration.
+config:
+  default: true
+  # Prose here wraps at 110 columns; the default 80 is not the house style.
+  MD013:
+    line_length: 110
+    tables: false
+    code_blocks: false
+  # Duplicate headings are fine when nested under different parents (per-stack READMEs).
+  MD024:
+    siblings_only: true
+  # Bare URLs appear in citations.
+  MD034: false
+globs:
+  - "**/*.md"
+ignores:
+  # A vendored module's README is not this project's prose and its line lengths are
+  # not this project's problem. The leading **/ matters: .terraform directories sit
+  # inside each stack, not at the repository root.
+  - "**/.terraform/**"
+  - "**/node_modules/**"
+  - ".tflint.d/**"

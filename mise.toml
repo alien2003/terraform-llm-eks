@@ -1,0 +1,114 @@
+# terraform-llm-eks toolchain and entry points.
+#
+# The workspace rules, Rule 5: the tasks below are the only entry points. Documentation never
+# asks the reader to paste a long command chain; it names a task.
+# The workspace rules, Rule 4: every version here is pinned deliberately, never "latest".
+
+[tools]
+terraform         = "1.16.1"
+kubectl           = "1.37.0"
+helm              = "3.21.4"
+kind              = "0.33.0"
+k6                = "2.2.0"
+vhs               = "0.11.0"
+tflint            = "0.64.0"
+trivy             = "0.74.0"
+gitleaks          = "8.30.1"
+terraform-docs    = "0.24.0"
+kubeconform       = "0.8.0"
+shellcheck        = "0.11.0"
+markdownlint-cli2 = "0.23.2"
+actionlint        = "1.7.12"
+pre-commit        = "4.6.2"
+s5cmd             = "2.3.0"
+yq                = "4.53.6"
+jq                = "1.8.2"
+awscli            = "2.36.41"
+
+[env]
+# Rule 2a: every cloud action outside window 0 and the last step of the final window
+# runs as the operator. Never override this on the command line.
+AWS_PROFILE = "llm-eks-operator"
+AWS_REGION  = "us-east-1"
+
+# Rule 3: commit only as the configured identity. git config cannot store it in this
+# environment (~/.gitconfig is out of scope, .git/config is a read-only bind mount),
+# so the identity is carried as environment variables instead.
+GIT_AUTHOR_NAME     = "alien2003"
+GIT_AUTHOR_EMAIL    = "alien2003@protonmail.ch"
+GIT_COMMITTER_NAME  = "alien2003"
+GIT_COMMITTER_EMAIL = "alien2003@protonmail.ch"
+
+# Project-wide tag values. Every billable resource carries these; audit and the
+# sweeper both select on them.
+PROJECT_TAG = "terraform-llm-eks"
+TF_IN_AUTOMATION = "1"
+
+# Rule 1: tflint defaults to ~/.tflint.d, which is outside the workspace. Keep its
+# plugins inside the repo instead (gitignored).
+TFLINT_PLUGIN_DIR = "{{config_root}}/.tflint.d/plugins"
+
+# Same reason: pre-commit caches the hook repositories it clones in ~/.cache/pre-commit
+# by default, which is outside the workspace. Reinstall the hook after changing this
+# (`mise exec -- pre-commit install`), because the path is read at hook run time.
+PRE_COMMIT_HOME = "{{config_root}}/.pre-commit-cache"
+
+[tasks.auth]
+description = "Pre-flight: print the assumed-role ARN for admin or operator, fail loudly otherwise"
+usage = '''
+arg "<role>" help="admin or operator"
+'''
+run = "scripts/auth.sh"
+
+[tasks.guard-status]
+description = "Report every guardrail present and healthy. A window does not open unless this is green"
+run = "scripts/guard-status.sh"
+
+[tasks.guard-drill]
+description = "Drill the permission boundary: policy simulator plus run-instances --dry-run matrix"
+run = "scripts/guard-drill.sh"
+
+[tasks.up]
+description = "Open a cloud window: arm the one-shot kill timer, then apply. Requires WINDOW_ID and WINDOW_HOURS"
+usage = '''
+arg "<vars>" var=#true help="WINDOW_ID=<n> WINDOW_HOURS=<h>, taken verbatim from the approval message"
+'''
+run = "scripts/window-up.sh"
+
+[tasks.down]
+description = "Close a cloud window: destroy, audit, then disarm the one-shot kill timer only if the audit is clean"
+run = "scripts/window-down.sh"
+
+[tasks.audit]
+description = "Scan for orphaned project-tagged resources. Must report zero before a window closes"
+run = "scripts/audit.sh"
+
+[tasks.lint]
+description = "Every local check that needs no cloud credentials"
+run = "scripts/lint.sh"
+
+[tasks.test]
+description = "kind-based integration suite for the non-GPU components"
+run = "scripts/test.sh"
+
+[tasks.bench]
+description = "k6 load profiles against the inference endpoint"
+usage = '''
+arg "<args>" var=#true help="k6 profile arguments"
+'''
+run = "scripts/bench.sh"
+
+[tasks.demo]
+description = "Record the README demo with vhs"
+run = "scripts/demo.sh"
+
+[tasks.screenshot]
+description = "Render a Grafana dashboard to PNG through the image renderer"
+usage = '''
+arg "<args>" var=#true help="dashboard uid and output path"
+'''
+run = "scripts/screenshot.sh"
+
+[tasks.wiki-sync]
+description = "Publish repo/docs to the wiki clone. Targets master, which is what GitHub wikis serve"
+run = "scripts/wiki-sync.sh"

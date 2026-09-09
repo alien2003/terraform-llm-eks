@@ -1,0 +1,39 @@
+# NVIDIA device plugin.
+#
+# Values verified against the chart's own values.yaml at version 0.20.0 from
+# https://nvidia.github.io/k8s-device-plugin.
+#
+# This is not optional on a cluster with a GPU NodePool. Karpenter does not treat
+# a GPU node as initialized until a device plugin advertises the nvidia.com/gpu
+# extended resource on it, so without this DaemonSet the node is provisioned,
+# never registers capacity, and is eventually reclaimed.
+# https://karpenter.sh/docs/concepts/scheduling/ under Accelerators/GPU Resources.
+
+# The chart's default affinity selects on node-feature-discovery labels, which
+# this cluster does not run. Karpenter labels its own nodes instead, and
+# karpenter.k8s.aws/instance-gpu-manufacturer is the documented well-known label
+# for the GPU vendor.
+# https://karpenter.sh/docs/concepts/scheduling/ under Well-Known Labels.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: karpenter.k8s.aws/instance-gpu-manufacturer
+              operator: In
+              values:
+                - nvidia
+
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+  - key: "${gpu_taint_key}"
+    operator: Exists
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi

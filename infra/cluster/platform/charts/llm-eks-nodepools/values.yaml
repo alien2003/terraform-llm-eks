@@ -1,0 +1,84 @@
+# Defaults for the NodePool and EC2NodeClass pair.
+#
+# Every field name below was read from the CRDs shipped in the Karpenter chart at
+# version 1.14.1 (crds/karpenter.sh_nodepools.yaml and
+# crds/karpenter.k8s.aws_ec2nodeclasses.yaml). Both CRDs serve exactly one
+# version, v1; the v1beta1 shape that most examples on the internet still use is
+# gone.
+#
+# The real values come from Terraform through values/nodepools.yaml. These
+# defaults exist so that `helm lint` and `helm template` produce a complete,
+# schema-valid render with no arguments.
+
+clusterName: llm-eks
+
+# Tag key Karpenter selects subnets and security groups by. The cluster stack put
+# it on the private subnets and on the node security group.
+discoveryTagKey: karpenter.sh/discovery
+
+# amiSelectorTerms alias, as family@version. An alias resolves the EKS optimized
+# AMI per instance type, which is how the GPU pool gets the accelerated AL2023
+# variant without a second selector.
+amiAlias: al2023@v20260903
+
+# Exactly one of these two. An EC2NodeClass rejects both together.
+nodeInstanceProfile: ""
+nodeRole: KarpenterNodeRole-llm-eks
+
+# Tags propagated to every instance, volume and network interface Karpenter
+# launches. Without Project the sweeper and `mise run audit` cannot see the
+# instance at all, which is the one failure mode this project cannot tolerate.
+tags:
+  Project: terraform-llm-eks
+  Stack: cluster
+  ManagedBy: terraform
+
+# Label key that separates node roles. The value differs per pool.
+roleLabelKey: llm-eks.io/role
+
+gpu:
+  roleLabelValue: gpu
+  instanceTypes:
+    - g6.xlarge
+    - g6.2xlarge
+  # Spot only, and only Spot. The operator permission boundary denies an
+  # on-demand launch of these types outright; this is the same rule stated where
+  # the scheduler can act on it, so that a denied launch is never even attempted.
+  capacityTypes:
+    - spot
+  architectures:
+    - amd64
+  taintKey: nvidia.com/gpu
+  taintValue: "true"
+  cpuLimit: 8
+  volumeSize: 120Gi
+  # WhenEmpty, not WhenEmptyOrUnderutilized. An underutilized GPU node is the
+  # normal state between two benchmark runs, and replacing it costs a model load
+  # measured in minutes.
+  consolidationPolicy: WhenEmpty
+  consolidateAfter: 2m
+  expireAfter: 8h
+  terminationGracePeriod: 10m
+  # One node terminating at a time. With a pool this small a percentage budget
+  # rounds to something unhelpful.
+  disruptionBudgets:
+    - nodes: "1"
+
+general:
+  roleLabelValue: general
+  instanceTypes:
+    - t3.medium
+    - m7i.large
+  capacityTypes:
+    - spot
+    - on-demand
+  architectures:
+    - amd64
+  cpuLimit: 16
+  volumeSize: 40Gi
+  consolidationPolicy: WhenEmptyOrUnderutilized
+  consolidateAfter: 1m
+  expireAfter: 24h
+  terminationGracePeriod: 5m
+  disruptionBudgets:
+    - nodes: 10%

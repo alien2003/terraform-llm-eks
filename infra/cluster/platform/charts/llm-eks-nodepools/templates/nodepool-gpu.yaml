@@ -1,0 +1,62 @@
+# The GPU NodePool. Spot only.
+#
+# Rule 2b says never use on-demand GPU capacity, and the operator
+# permission boundary denies it. This is the same rule expressed where the
+# scheduler can act on it: with capacity-type restricted to spot, Karpenter never
+# even attempts a launch the boundary would reject, so a Spot shortage shows up as
+# a pending pod rather than as an AccessDenied in the controller log.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ .Release.Name }}-gpu
+  labels:
+    {{- include "llm-eks-nodepools.labels" . | nindent 4 }}
+spec:
+  template:
+    metadata:
+      labels:
+        {{ .Values.roleLabelKey }}: {{ .Values.gpu.roleLabelValue | quote }}
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: {{ .Release.Name }}-gpu
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            {{- toYaml .Values.gpu.capacityTypes | nindent 12 }}
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            {{- toYaml .Values.gpu.instanceTypes | nindent 12 }}
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            {{- toYaml .Values.gpu.architectures | nindent 12 }}
+        - key: kubernetes.io/os
+          operator: In
+          values:
+            - linux
+      # Nothing lands on an accelerator by accident. The device plugin, the DCGM
+      # exporter, the node exporter and the inference pod all carry a matching
+      # toleration; everything else in the cluster does not.
+      taints:
+        - key: {{ .Values.gpu.taintKey }}
+          value: {{ .Values.gpu.taintValue | quote }}
+          effect: NoSchedule
+      expireAfter: {{ .Values.gpu.expireAfter | quote }}
+      terminationGracePeriod: {{ .Values.gpu.terminationGracePeriod | quote }}
+  disruption:
+    consolidationPolicy: {{ .Values.gpu.consolidationPolicy }}
+    consolidateAfter: {{ .Values.gpu.consolidateAfter | quote }}
+    budgets:
+      {{- toYaml .Values.gpu.disruptionBudgets | nindent 6 }}
+  # The second brake after the permission boundary. The boundary stops the wrong
+  # instance type; this stops too many of the right one, which is the failure mode
+  # that actually costs money.
+  limits:
+    cpu: {{ .Values.gpu.cpuLimit | quote }}
+  # Lower weight than the general pool, so a pod with no GPU request is never
+  # placed here even if it would fit.
+  weight: 1

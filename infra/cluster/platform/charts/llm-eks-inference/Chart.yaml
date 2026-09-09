@@ -1,0 +1,11 @@
+apiVersion: v2
+name: llm-eks-inference
+description: vLLM serving an open-weights model on the Spot GPU pool, with its ServiceMonitor and its KEDA ScaledObject.
+type: application
+version: 0.1.0
+appVersion: "0.28.0"
+home: https://docs.vllm.ai/
+sources:
+  - https://docs.vllm.ai/en/stable/serving/online_serving/
+  - https://docs.vllm.ai/en/stable/design/metrics
+  - https://keda.sh/docs/2.20/scalers/prometheus/
