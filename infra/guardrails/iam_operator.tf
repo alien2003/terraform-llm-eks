@@ -252,6 +252,13 @@ data "aws_iam_policy_document" "operator_boundary" {
       # guard-status has to be able to tell "not in an organization" apart from
       # "not allowed to ask". Without this the check is inconclusive forever.
       "organizations:DescribeOrganization",
+      # Rule 2b's in-window pre-flight needs the credit balance from the latest
+      # snapshot, and credits are treated as cash. billing:GetCredits returns the
+      # remaining amount, the expiry and the applicable products, so the figure is a
+      # read rather than a console screenshot somebody has to remember to take. Read
+      # access level, no resource types and no condition keys.
+      # https://docs.aws.amazon.com/service-authorization/latest/reference/list_billing.html
+      "billing:GetCredits",
       "freetier:GetAccountActivity",
       "freetier:GetAccountPlanState",
       "freetier:GetFreeTierUsage",
@@ -678,6 +685,7 @@ data "aws_iam_policy_document" "operator_boundary" {
     sid    = "RegionLock"
     effect = "Deny"
     not_actions = [
+      "billing:*",
       "budgets:*",
       "ce:*",
       "cloudfront:*",
@@ -773,6 +781,7 @@ data "aws_iam_policy_document" "operator_permissions" {
     sid    = "ReadMoneyAndQuotas"
     effect = "Allow"
     actions = [
+      "billing:GetCredits",
       "budgets:Describe*",
       "budgets:View*",
       "ce:Describe*",

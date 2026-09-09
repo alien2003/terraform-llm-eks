@@ -763,6 +763,38 @@ else
   check FAIL "free tier account plan" "$(short "$RO_ERR")"
 fi
 
+# The credit balance itself, which Rule 2b names as part of the in-window pre-flight
+# and which costs/FINAL_REPORT.md needs a "before" figure for. This used to be a
+# console page somebody had to remember to screenshot; billing:GetCredits returns the
+# remaining amount, the expiry and the applicable products directly, so the number in
+# costs/credits.md can trace to a command instead of to a memory.
+#
+# The API is global and lives with the other billing endpoints in us-east-1.
+# --start-date is required and must be a past date no more than one year back.
+# https://docs.aws.amazon.com/cli/latest/reference/billing/get-credits.html
+credits_start="$(date -u -d '364 days ago' +%s 2>/dev/null || date -u -v-364d +%s)"
+if run_ro billing get-credits --account-id "$ACCOUNT" --start-date "$credits_start" \
+     --region "$BILLING_REGION" --output json; then
+  credit_rows="$(printf '%s' "$RO_OUT" | jq -r '.credits | length')"
+  if [ "$credit_rows" -eq 0 ]; then
+    check FAIL "credit balance" "billing:GetCredits returned no credits. This project is funded by them and every threshold is set on gross spend on the assumption they exist."
+  else
+    credit_remaining="$(printf '%s' "$RO_OUT" |
+      jq -r '[.credits[] | (.remainingAmount.currencyAmount // "0" | tonumber)] | add | tostring')"
+    credit_currency="$(printf '%s' "$RO_OUT" | jq -r '.credits[0].remainingAmount.currencyCode // "USD"')"
+    credit_expiry="$(printf '%s' "$RO_OUT" | jq -r '[.credits[].expirationDate] | sort | .[0] // "unknown"')"
+    credit_products="$(printf '%s' "$RO_OUT" |
+      jq -r '[.credits[].applicableProductNames[]?] | unique | join(", ") | if . == "" then "unspecified" else . end')"
+    check PASS "credit balance" "$credit_remaining $credit_currency remaining across $credit_rows credit(s), earliest expiry $credit_expiry"
+    # Printed ready to paste, because Rule 5 forbids writing a number from memory and
+    # this is the one number the whole cost story is measured against.
+    note "credits.md row: | $(date -u +%Y-%m-%d) | ${WINDOW_ID:-pre-flight} | $credit_remaining $credit_currency | $credit_expiry | billing:GetCredits |"
+    note "credits.md applicable products: $credit_products"
+  fi
+else
+  check FAIL "credit balance" "$(short "$RO_ERR") — if this is AccessDenied, the operator is missing billing:GetCredits, which infra/guardrails grants in ReadOnlyMoneyAndAccountVisibility."
+fi
+
 if run_ro freetier list-account-activities --region "$BILLING_REGION" --output json; then
   act_total="$(printf '%s' "$RO_OUT" | jq -r '.activities | length')"
   act_done="$(printf '%s' "$RO_OUT" | jq -r '[.activities[] | select(.status == "COMPLETED")] | length')"
