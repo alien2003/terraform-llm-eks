@@ -11,6 +11,11 @@ helm              = "3.21.4"
 kind              = "0.33.0"
 k6                = "2.2.0"
 vhs               = "0.11.0"
+# vhs shells out to both of these and exits with an install hint if either is
+# missing, so pinning vhs alone leaves `mise run demo` and the terminal captures
+# broken on a fresh clone.
+ffmpeg            = "9.0.1"
+ttyd              = "1.7.7"
 tflint            = "0.64.0"
 trivy             = "0.74.0"
 gitleaks          = "8.30.1"
