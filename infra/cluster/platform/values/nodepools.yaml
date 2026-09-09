@@ -1,0 +1,25 @@
+# Overrides for the local llm-eks-nodepools chart.
+#
+# Filled by templatefile() in karpenter.tf. Still valid YAML with the
+# placeholders in place, so `helm lint` and `helm template` read it directly.
+
+clusterName: "${cluster_name}"
+discoveryTagKey: "${discovery_tag_key}"
+amiAlias: "${ami_alias}"
+
+nodeInstanceProfile: "${node_instance_profile}"
+nodeRole: "${node_iam_role}"
+
+tags: ${tags_json}
+
+roleLabelKey: "${role_label_key}"
+
+gpu:
+  instanceTypes: ${gpu_instance_types_json}
+  taintKey: "${gpu_taint_key}"
+  cpuLimit: ${gpu_cpu_limit}
+  volumeSize: "${gpu_volume_size}"
+
+general:
+  instanceTypes: ${general_instance_types_json}
+  cpuLimit: ${general_cpu_limit}

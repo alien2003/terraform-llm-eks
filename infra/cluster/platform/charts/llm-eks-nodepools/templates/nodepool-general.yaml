@@ -1,0 +1,45 @@
+# The general NodePool. Overflow capacity for anything the managed node group
+# cannot hold, on either market.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ .Release.Name }}-general
+  labels:
+    {{- include "llm-eks-nodepools.labels" . | nindent 4 }}
+spec:
+  template:
+    metadata:
+      labels:
+        {{ .Values.roleLabelKey }}: {{ .Values.general.roleLabelValue | quote }}
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: {{ .Release.Name }}-general
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            {{- toYaml .Values.general.capacityTypes | nindent 12 }}
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            {{- toYaml .Values.general.instanceTypes | nindent 12 }}
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            {{- toYaml .Values.general.architectures | nindent 12 }}
+        - key: kubernetes.io/os
+          operator: In
+          values:
+            - linux
+      expireAfter: {{ .Values.general.expireAfter | quote }}
+      terminationGracePeriod: {{ .Values.general.terminationGracePeriod | quote }}
+  disruption:
+    consolidationPolicy: {{ .Values.general.consolidationPolicy }}
+    consolidateAfter: {{ .Values.general.consolidateAfter | quote }}
+    budgets:
+      {{- toYaml .Values.general.disruptionBudgets | nindent 6 }}
+  limits:
+    cpu: {{ .Values.general.cpuLimit | quote }}
+  weight: 10

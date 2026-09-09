@@ -1,0 +1,22 @@
+{{- if .Values.serviceMonitor.enabled }}
+# vLLM serves its Prometheus metrics on the same port as the API, at /metrics.
+# https://docs.vllm.ai/en/stable/serving/online_serving/
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "llm-eks-inference.name" . }}
+  labels:
+    {{- include "llm-eks-inference.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "llm-eks-inference.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+{{- end }}

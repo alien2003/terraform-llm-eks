@@ -1,0 +1,31 @@
+# Defaults for the External Secrets store and the secrets built from it.
+#
+# Field names were read from the CRDs shipped in the external-secrets chart at
+# version 2.10.0 (templates/crds/clustersecretstore.yaml and
+# templates/crds/externalsecret.yaml). Both serve external-secrets.io/v1 as the
+# storage version; v1beta1 is served only behind crds.unsafeServeV1Beta1 and is
+# on its way out.
+#
+# The real values come from Terraform through values/secrets.yaml.
+
+storeName: aws-secretsmanager
+region: us-east-1
+
+# No auth block. The controller runs with credentials the EKS Pod Identity agent
+# injects, which is the AWS SDK's default chain, so there is no key, no secretRef
+# and no role ARN to write down here.
+
+grafana:
+  enabled: true
+  namespace: monitoring
+  # Name of the Kubernetes Secret the Grafana chart mounts through
+  # grafana.admin.existingSecret.
+  secretName: grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
+  # ARN of the AWS Secrets Manager secret, a JSON object with username and
+  # password keys. Rule 2c: referenced by ARN, never by value.
+  remoteSecretArn: ""
+  remoteUserProperty: username
+  remotePasswordProperty: password
+  refreshInterval: 1h

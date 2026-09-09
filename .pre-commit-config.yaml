@@ -1,0 +1,90 @@
+# Pre-commit hooks for terraform-llm-eks.
+#
+# The one hook that is not optional is gitleaks. Everything else here is convenience;
+# gitleaks is the last thing standing between a working tree and a public repository.
+#
+# Every `rev` is a tag, pinned exactly, and every tag is a release rather than a
+# branch. `pre-commit autoupdate` will move them; read the diff before accepting it.
+#
+# This file deliberately does not duplicate the full local check set. That is
+# `mise run lint`, and it takes long enough that running it on every commit would
+# teach me to pass --no-verify, which is worse than not having it. The hooks below
+# are the ones that finish in about a second.
+#
+# Install once, per clone:
+#
+#     mise exec -- pre-commit install
+
+minimum_pre_commit_version: "4.0.0"
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      # gitleaks-system rather than the default gitleaks hook: the default builds
+      # gitleaks from source with a Go toolchain that pre-commit downloads for
+      # itself, which would make the version of the scanner depend on which hook
+      # environment was built when. -system runs the gitleaks that mise.toml pins,
+      # and the rev above is the matching tag, so the hook definition and the binary
+      # are the same release.
+      - id: gitleaks-system
+        # Upstream sets pass_filenames: false on the `gitleaks` and `gitleaks-docker`
+        # ids and forgets it on this one. Without it pre-commit appends the staged
+        # filenames to the entry, `gitleaks git` reads the first of them as the
+        # repository path, and the scan dies inside git with `fatal: cannot change to
+        # 'x.py': Not a directory` while still exiting 0. I reproduced that in a
+        # scratch repository: one staged file holding an AWS key pair, hook reports
+        # Passed, commit lands. With this line the entry's own --staged flag is what
+        # selects the content, the same run reports the finding and exits 1, and the
+        # commit is refused.
+        pass_filenames: false
+        # The same config scripts/lint.sh and the CI workflow use, so a finding here
+        # is a finding there.
+        args: [--config, scripts/gitleaks.toml]
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.1
+    hooks:
+      # Formatting only. terraform_validate would need an initialised working
+      # directory per stack, which is a registry download, not a pre-commit check.
+      # CI does that.
+      - id: terraform_fmt
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-toml
+      - id: check-json
+      # Helm templates are Go templates that happen to end in .yaml and are not
+      # valid YAML until they are rendered. helm lint and helm template check them;
+      # a YAML parser cannot.
+      - id: check-yaml
+        exclude: ^infra/cluster/platform/charts/[^/]+/templates/
+      - id: check-shebang-scripts-are-executable
+      - id: check-executables-have-shebangs
+      - id: detect-private-key
+      # detect-aws-credentials is deliberately absent. It works by reading the
+      # developer's own ~/.aws credentials file to learn which strings to look for,
+      # and nothing in this project should be reaching into that file. gitleaks
+      # matches AWS key material by pattern instead, which needs no such access.
+
+  - repo: local
+    hooks:
+      # The author writes in their own voice, and this is a public repository. No
+      # upstream hook checks for that, and it is a one-line grep. The first letter of
+      # each alternative sits in a one-character class so the pattern does not match
+      # the file it is written in.
+      - id: authorship
+        name: no machine-authorship claims
+        language: system
+        pass_filenames: false
+        entry: >-
+          sh -c '! grep -rniE "[c]laude|[a]nthropic|ai-[g]enerated|ai-[a]ssisted" .
+          --exclude-dir=.git --exclude-dir=.terraform --exclude-dir=.tflint.d
+          --exclude-dir=.pre-commit-cache'

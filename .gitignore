@@ -42,3 +42,20 @@ terraform.rc
 # Optional: ignore plan files saved before destroying Terraform configuration
 # Uncomment the line below if you want to ignore planout files.
 # planout
+# tflint plugins, redirected here from ~/.tflint.d by mise.toml so that nothing this
+# repository runs writes outside its own checkout
+.tflint.d/
+
+# mise-installed local state
+.terraform.lock.hcl.bak
+
+# Python bytecode from the kill Lambda's unit tests
+__pycache__/
+*.py[cod]
+
+# pre-commit's own cache, if it is ever pointed inside the repository
+.pre-commit-cache/
+
+# pre-commit hook-repository cache, redirected here from ~/.cache/pre-commit
+# by mise.toml for the same reason as .tflint.d (the workspace rules, Rule 1)
+.pre-commit-cache/

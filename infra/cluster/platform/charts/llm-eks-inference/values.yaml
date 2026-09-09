@@ -1,0 +1,137 @@
+# Defaults for the inference workload.
+#
+# A plain Deployment, not a KServe InferenceService. See ADR 0045 for why.
+#
+# The real values come from Terraform through values/inference.yaml. These
+# defaults exist so that `helm lint` and `helm template` produce a complete,
+# schema-valid render with no arguments.
+
+nameOverride: vllm
+serviceAccountName: vllm
+
+image:
+  repository: vllm/vllm-openai
+  tag: v0.28.0
+  # Pinned by digest as well as by tag, so a retagged image cannot change what
+  # runs between two benchmark runs.
+  digest: "sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14"
+  pullPolicy: IfNotPresent
+
+model:
+  # Hugging Face repository id. Also the value of the model_name label on every
+  # vLLM metric, which is what the dashboards and the KEDA query select on.
+  id: Qwen/Qwen2.5-7B-Instruct
+  # Where the init container stages the weights and where vLLM reads them.
+  mountPath: /models
+  maxLen: 8192
+  gpuMemoryUtilization: "0.90"
+  maxNumSeqs: 64
+
+weights:
+  # s3://<bucket>/<prefix>. Synced once per pod start by an init container using
+  # the credentials EKS Pod Identity hands the pod.
+  bucket: llm-eks-weights-000000000000
+  prefix: models/Qwen/Qwen2.5-7B-Instruct
+  image:
+    repository: amazon/aws-cli
+    tag: "2.36.41"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+service:
+  port: 8000
+
+# Placement. The pod belongs on a node from the GPU NodePool and nowhere else.
+nodeSelector:
+  llm-eks.io/role: gpu
+
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
+# The pod has the node to itself, so the CPU limit is set at the whole of the
+# smallest whitelisted GPU type rather than at a fraction of it: a tighter limit
+# throttles the tokenizer and the sampler for no benefit. Raise it in step with
+# the instance type if the pool ever runs on something larger.
+resources:
+  requests:
+    cpu: "2"
+    memory: 6Gi
+    ephemeral-storage: 30Gi
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "4"
+    memory: 12Gi
+    ephemeral-storage: 60Gi
+    nvidia.com/gpu: "1"
+
+# The pod runs as an unprivileged user with a writable home, because neither the
+# CUDA runtime nor the AWS CLI can work with no writable HOME. UID and GID are
+# above 10000 deliberately. The home directory is /home/vllm rather than /root
+# because that is the path vLLM's own documentation uses for the non-root case:
+# https://docs.vllm.ai/en/stable/deployment/docker
+securityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+  homeDir: /home/vllm
+
+# Both containers run on a read-only root filesystem. Every directory vLLM
+# documents as writable is an emptyDir volume in the Deployment, and every cache
+# root that resolves from an environment variable is pinned there, so none of them
+# falls back to a path inside the image. See the securityContext comment in
+# templates/deployment.yaml for the four paths and their sources.
+#
+# It stays a value rather than a literal so that a first window can flip it back
+# in one line if some library in the image turns out to write somewhere those four
+# do not cover. Confirming that is item 5 of the first-window list in the platform
+# README.
+readOnlyRootFilesystem: true
+
+# Shared memory for the model executor. The container's default /dev/shm is 64Mi,
+# which is not enough once vLLM starts moving tensors between processes.
+# https://docs.vllm.ai/en/stable/deployment/docker/
+sharedMemorySize: 2Gi
+
+# Loading a multi-gigabyte model onto an accelerator takes minutes, and a liveness
+# probe that fires during it restarts the pod forever. The startup probe is what
+# holds the other two off until the server answers.
+startupProbe:
+  periodSeconds: 10
+  failureThreshold: 90
+readinessProbe:
+  periodSeconds: 10
+  failureThreshold: 3
+livenessProbe:
+  periodSeconds: 30
+  failureThreshold: 3
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+scaledObject:
+  enabled: true
+  minReplicaCount: 0
+  maxReplicaCount: 2
+  pollingInterval: 15
+  cooldownPeriod: 300
+  # Prometheus that answers the trigger query. The kube-prometheus-stack chart
+  # names this Service <release>-prometheus.
+  prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+  # Requests waiting in the vLLM scheduler queue, per replica. The metric name is
+  # vLLM's own; see https://docs.vllm.ai/en/stable/design/metrics.
+  threshold: "4"
+  activationThreshold: "0"
+  scaleDownStabilizationSeconds: 300

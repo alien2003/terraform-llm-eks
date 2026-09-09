@@ -1,0 +1,5 @@
+# Lambda package built by the archive_file data source at plan time.
+build/
+
+# Python bytecode from running the handler tests.
+__pycache__/

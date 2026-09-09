@@ -1,0 +1,30 @@
+# gitleaks configuration used by scripts/lint.sh when the repository root has no
+# .gitleaks.toml of its own.
+#
+# It exists for one reason: gitleaks has no command-line path exclusion, and
+# `--no-git` makes it scan .terraform/, where the downloaded Terraform modules keep
+# example configurations containing demonstration credentials. Those are not this
+# project's files and not this project's secrets, and a scanner that cries wolf four
+# times on every run is a scanner nobody reads.
+#
+# Everything else keeps the default rule set.
+
+title = "terraform-llm-eks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Vendored and generated directories, which hold no secret of ours"
+paths = [
+  '''\.terraform/''',
+  '''\.tflint\.d/''',
+  '''\.git/''',
+  # The workspace-local kubeconfig scripts/test.sh redirects kind into, so that kind
+  # does not write to the author's ~/.kube/config. It is gitignored by test/.gitignore
+  # and scripts/test.sh deletes it when it tears its cluster down; it survives only
+  # when LLM_EKS_TEST_KEEP=1 asks for the cluster to be kept. What it holds then is a
+  # client certificate for a local kind cluster generated minutes earlier, which is not
+  # a secret of this project's in any sense that matters.
+  '''test/\.kube/''',
+]

@@ -1,0 +1,133 @@
+# Prometheus, Grafana, the Grafana image renderer, kube-state-metrics and the
+# node exporter.
+#
+# Values verified against the chart's own values.yaml at version 90.0.0 from
+# https://prometheus-community.github.io/helm-charts, and against the bundled
+# grafana subchart 13.2.2 for everything under `grafana:`.
+
+# ------------------------------------------------------------------ Prometheus
+
+prometheus:
+  prometheusSpec:
+    retention: "${prometheus_retention}"
+
+    # Select every ServiceMonitor, PodMonitor, PrometheusRule and Probe in the
+    # cluster rather than only the ones carrying this release's label. The
+    # Karpenter, DCGM exporter and vLLM ServiceMonitors are created by other
+    # releases, and a per-release label on each of them is one more thing to get
+    # wrong.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+    # emptyDir rather than a volumeClaimTemplate. The cluster stack installs no
+    # EBS CSI driver, so there is no StorageClass to satisfy a claim and the pod
+    # would stay Pending. emptyDir keeps the TSDB for the life of the pod, which
+    # is the life of the window.
+    storageSpec:
+      emptyDir:
+        sizeLimit: "${prometheus_storage_size}"
+
+    nodeSelector:
+      "${system_label_key}": "${system_label_value}"
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        memory: 2Gi
+
+# --------------------------------------------------------------------- Grafana
+
+grafana:
+  # The administrator credentials come from the Secret External Secrets writes out
+  # of AWS Secrets Manager. Rule 2c: no password literal anywhere in this
+  # repository, and none in Terraform state either.
+  admin:
+    existingSecret: "${grafana_admin_secret_name}"
+    userKey: "${grafana_admin_user_key}"
+    passwordKey: "${grafana_admin_pass_key}"
+
+  # The sidecar watches every namespace for ConfigMaps carrying this label and
+  # drops their contents into Grafana's provisioning directory. The two project
+  # dashboards are created as labelled ConfigMaps by dashboards.tf.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+
+  # `mise run screenshot` renders dashboards to PNG through this deployment, so it
+  # is part of the stack rather than an optional extra. Grafana's own renderer
+  # plugin needs a headless browser, which is why it runs as a separate pod.
+  imageRenderer:
+    enabled: true
+    replicas: 1
+    image:
+      registry: docker.io
+      repository: grafana/grafana-image-renderer
+      tag: "${image_renderer_tag}"
+      pullPolicy: IfNotPresent
+    nodeSelector:
+      "${system_label_key}": "${system_label_value}"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+
+  nodeSelector:
+    "${system_label_key}": "${system_label_value}"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 384Mi
+
+  # No persistence. Dashboards are provisioned from ConfigMaps and the datasource
+  # from the chart, so there is nothing in Grafana's database worth an EBS volume.
+  persistence:
+    enabled: false
+
+# ------------------------------------------------------------------- exporters
+
+kube-state-metrics:
+  nodeSelector:
+    "${system_label_key}": "${system_label_value}"
+
+# The node exporter is a DaemonSet and belongs on every node, GPU nodes included.
+# Its chart already tolerates every NoSchedule taint, so there is nothing to add
+# here for the accelerator taint.
+
+prometheusOperator:
+  nodeSelector:
+    "${system_label_key}": "${system_label_value}"
+
+# ---------------------------------------------------------- disabled on EKS
+
+# EKS runs the control plane. There is no scrapeable endpoint for the controller
+# manager, the scheduler, etcd or kube-proxy on a cluster whose control plane the
+# customer does not own, and leaving them on produces permanently failing targets
+# and firing alerts that mean nothing.
+# https://docs.aws.amazon.com/eks/latest/userguide/prometheus.html
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# Alertmanager is off. Every alert this project cares about is a cost alert, and
+# those are delivered by the SNS topic the guardrails stack owns, outside the
+# cluster and independent of whether the cluster is up.
+alertmanager:
+  enabled: false

@@ -1,0 +1,18 @@
+# Lint-only overrides.
+#
+# values/kube-prometheus-stack.yaml carries Terraform placeholders, and two of the
+# fields they stand in for are pattern-validated by the Prometheus CRD schema:
+# spec.retention takes a Prometheus duration and spec.storage.emptyDir.sizeLimit
+# takes a Kubernetes quantity. A placeholder is neither, so `helm template` piped
+# to `kubeconform -strict` fails on those two fields and on nothing else.
+#
+# This file supplies concrete values for exactly those two, so that the offline
+# render is schema-valid and any other failure is a real one. It is never passed
+# to a real install; the module's own defaults are what Terraform substitutes.
+
+prometheus:
+  prometheusSpec:
+    retention: 24h
+    storageSpec:
+      emptyDir:
+        sizeLimit: 20Gi

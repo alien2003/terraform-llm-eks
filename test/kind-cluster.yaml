@@ -1,0 +1,28 @@
+# kind cluster for the local integration suite.
+#
+# Two nodes: a control plane, and one worker labelled the way the real system node
+# group is labelled, so that a chart with a nodeSelector on llm-eks.io/role=system
+# can actually be scheduled here rather than only rendered.
+#
+# There is no GPU node and there never will be. Everything that needs an L4 is
+# window work; this cluster exists to catch the mistakes that do not need one —
+# a malformed manifest, a missing label, a service pointing at nothing.
+#
+# The node image is deliberately not pinned to a digest here. It is pinned by the
+# kind binary version, which mise.toml fixes at 0.33.0, and each kind release ships
+# with one default node image. Pinning a digest as well means two versions to keep in
+# step and one of them will drift. To pin explicitly, set KIND_NODE_IMAGE to the
+# kindest/node reference with the sha256 digest from the kind release notes; the
+# suite passes it through.
+#
+# https://kind.sigs.k8s.io/docs/user/configuration
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: llm-eks-test
+
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      llm-eks.io/role: system

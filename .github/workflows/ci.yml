@@ -1,0 +1,423 @@
+# Continuous integration for terraform-llm-eks.
+#
+# The property that matters most here is a negative one: this workflow holds no cloud
+# credentials. There is no configure-aws-credentials step, no AWS_* secret, and no
+# `id-token: write` permission, so the OIDC token issuer is not even reachable from
+# these runners. Everything below is a check that can be answered from the source tree
+# plus the public Terraform registry, the public Helm chart repositories, the public CRD
+# schema catalogue and, for the integration job, a kind cluster on the runner's own
+# docker daemon. None of it is an AWS account.
+#
+# The `no-cloud-credentials` job checks that, and it is worth being precise about what
+# it can and cannot see. It runs on a runner set up the way the check jobs are,
+# mise-action included, because mise-action's `env` input defaults to true and copies
+# mise.toml's `[env]` block into $GITHUB_ENV for every job in this file. So the job does
+# cover the shared environment: a credential added to mise.toml or to this workflow's
+# top-level `env:` turns the build red. It does not cover a step-level `env:` added to
+# some other job, which no job can observe from the outside. It is a tripwire on the
+# environment the checks actually run in, not a proof about the whole file. ADR 0006.
+#
+# Every action is pinned to a commit SHA rather than a tag. A tag is a moving pointer:
+# whoever owns the action can repoint v7 at a different commit at any time, and a
+# workflow that trusts a tag runs whatever that pointer says today. A SHA is the
+# artefact itself. The tag each SHA corresponds to is written next to it so the pin
+# stays readable. ADR 0006.
+#
+# The toolchain comes from mise, reading the same `mise.toml` a developer uses, so CI
+# and a laptop run identical versions of terraform, tflint, trivy, helm and the rest.
+# ADR 0001. Each job installs only the tools it needs; `install_args` takes tool names
+# and the versions still come from `mise.toml`.
+#
+# `mise run lint` is the local equivalent of this workflow. It is not what CI runs,
+# because that script degrades to SKIP when a tool is missing, which is right on a
+# laptop and wrong on a build server, where a check that quietly does not run looks
+# exactly like a check that passed. ADR 0006.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read the code, nothing else. No package publishing, no issue comments, no OIDC.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # mise itself is pinned too. Without this the action installs the newest release,
+  # which would make the toolchain resolver the one unpinned thing in a repository
+  # whose whole point is that versions do not move underneath you.
+  MISE_VERSION: "2026.9.3"
+  # kubeconform has no schema for the custom resources these charts render. The CRDs
+  # catalogue supplies them; `default` still covers the built-in kinds and is tried
+  # first. Karpenter, KEDA, external-secrets and the Prometheus operator all resolve
+  # from here.
+  CRD_CATALOG: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+jobs:
+  no-cloud-credentials:
+    name: no cloud credentials
+    runs-on: ubuntu-24.04
+    steps:
+      # This job checks out the repository and runs mise-action with its defaults, which
+      # is not what a minimal assertion job would do. It is deliberate. mise-action's
+      # `env` input defaults to true and appends `mise env` to $GITHUB_ENV, and this
+      # repository's mise.toml carries an `[env]` block, so the environment every other
+      # job runs in is the runner's environment plus that block. A job that skipped
+      # these two steps would be making claims about an environment no check runs in,
+      # and a credential added to mise.toml would pass it. jq is the smallest tool in
+      # mise.toml and is installed only so the setup matches the other jobs' setup.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: jq
+
+      # AWS_PROFILE is deliberately not on the list below. mise.toml sets it to
+      # llm-eks-operator so that no local command can act as anything else, and it
+      # arrives here with the rest of `[env]`. A profile name is not a credential: it
+      # names a block in ~/.aws/config, and the $HOME/.aws check below is what proves
+      # there is no such file to resolve it against. Everything on the list is either
+      # credential material, a role to assume, or a path that would point the SDK at
+      # one.
+      - name: assert that this runner has no AWS credential source
+        run: |
+          fail=0
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                   AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE \
+                   AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE \
+                   AWS_CONTAINER_CREDENTIALS_FULL_URI \
+                   AWS_CONTAINER_CREDENTIALS_RELATIVE_URI \
+                   ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            if [ -n "${!v-}" ]; then
+              echo "::error::$v is set in the CI environment"
+              fail=1
+            fi
+          done
+          if [ -e "$HOME/.aws" ]; then
+            echo "::error::$HOME/.aws exists on this runner"
+            fail=1
+          fi
+          if [ "$fail" -eq 0 ]; then
+            echo "no AWS credential source is present, and no OIDC token can be requested"
+          fi
+          exit "$fail"
+
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-24.04
+    outputs:
+      stacks: ${{ steps.discover.outputs.stacks }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: terraform
+
+      # -recursive skips dot-directories, so the vendored modules under .terraform
+      # are not reformatted or reported on.
+      - name: terraform fmt -check
+        run: terraform fmt -check -diff -recursive .
+
+      # The stack list is discovered rather than written out, so a new directory of
+      # .tf files is validated and scanned from the moment it exists. The same find
+      # is in scripts/lint.sh.
+      - name: discover terraform stacks
+        id: discover
+        run: |
+          stacks="$(find infra -name '*.tf' -not -path '*/.terraform/*' -print0 |
+            xargs -0 -n1 dirname | sort -u | jq -R . | jq -s -c .)"
+          if [ "$stacks" = "[]" ]; then
+            echo "::error::no terraform stacks found under infra/"
+            exit 1
+          fi
+          echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
+          echo "$stacks"
+
+  terraform:
+    name: terraform ${{ matrix.stack }}
+    needs: fmt
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.fmt.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: terraform trivy
+
+      # -backend=false is what makes this possible without credentials: the providers
+      # and modules are downloaded from the public registry, and no S3 bucket is
+      # contacted. It is also why the cluster stack's backend block is never exercised
+      # here.
+      - name: terraform init
+        env:
+          STACK: ${{ matrix.stack }}
+        run: terraform -chdir="$STACK" init -backend=false -input=false
+
+      - name: terraform validate
+        env:
+          STACK: ${{ matrix.stack }}
+        run: terraform -chdir="$STACK" validate
+
+      # One trivy run per stack, from inside the stack, so the .trivyignore next to a
+      # configuration is the one that applies. A stack nested inside another (the
+      # platform layer inside the cluster stack) is skipped by the outer run and
+      # scanned on its own pass, so an accepted finding is recorded in the directory
+      # it belongs to rather than in its parent.
+      - name: trivy config
+        env:
+          STACK: ${{ matrix.stack }}
+          STACKS: ${{ needs.fmt.outputs.stacks }}
+        run: |
+          skips=()
+          for other in $(printf '%s' "$STACKS" | jq -r '.[]'); do
+            case "$other" in
+              "$STACK"/*) skips+=(--skip-dirs "${other#"$STACK"/}") ;;
+            esac
+          done
+          cd "$STACK"
+          trivy config --exit-code 1 --skip-dirs .terraform "${skips[@]}" .
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: tflint
+
+      # The AWS ruleset is a plugin, downloaded from its GitHub releases at the
+      # version pinned in .tflint.hcl. GITHUB_TOKEN is passed only to lift the
+      # anonymous API rate limit; it is the workflow's own read-only token and grants
+      # nothing outside this repository.
+      - name: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TFLINT_PLUGIN_DIR: ${{ github.workspace }}/.tflint.d/plugins
+        run: tflint --init
+
+      - name: tflint --recursive
+        env:
+          TFLINT_PLUGIN_DIR: ${{ github.workspace }}/.tflint.d/plugins
+        run: tflint --recursive
+
+  helm:
+    name: helm and kubeconform
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: helm kubeconform
+
+      - name: helm lint
+        run: |
+          charts="$(find infra -name Chart.yaml -not -path '*/.terraform/*' \
+            -exec dirname {} \; | sort)"
+          if [ -z "$charts" ]; then
+            echo "::error::no charts found under infra/"
+            exit 1
+          fi
+          for chart in $charts; do
+            helm lint "$chart"
+          done
+
+      # -skip CustomResourceDefinition, not -ignore-missing-schemas. kubeconform has
+      # no schema for apiextensions.k8s.io CustomResourceDefinition objects and the
+      # upstream charts ship dozens of them; skipping that one kind still validates
+      # every other object, whereas ignoring missing schemas would wave through every
+      # custom resource in the repository, which is most of what these charts render.
+      - name: helm template | kubeconform, local charts
+        run: |
+          charts="$(find infra -name Chart.yaml -not -path '*/.terraform/*' \
+            -exec dirname {} \; | sort)"
+          for chart in $charts; do
+            echo "--- $chart"
+            helm template lint "$chart" --namespace lint |
+              kubeconform -strict -summary -skip CustomResourceDefinition \
+                -schema-location default -schema-location "$CRD_CATALOG"
+          done
+
+      # The upstream monitoring chart is rendered with this repository's own values
+      # files, which is the only offline way to find out that a value name or a CRD
+      # field is wrong before a cluster exists. The chart version is read from the
+      # variable that Terraform uses, so there is one pin rather than two.
+      - name: helm template | kubeconform, kube-prometheus-stack
+        run: |
+          version="$(awk '/^variable "kube_prometheus_stack_chart_version"/,/^}/' \
+            infra/cluster/platform/variables.tf |
+            sed -n 's/.*default *= *"\(.*\)".*/\1/p')"
+          if [ -z "$version" ]; then
+            echo "::error::could not read kube_prometheus_stack_chart_version from infra/cluster/platform/variables.tf"
+            exit 1
+          fi
+          echo "kube-prometheus-stack $version"
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm template kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+            --version "$version" --namespace monitoring \
+            -f infra/cluster/platform/values/kube-prometheus-stack.yaml \
+            -f infra/cluster/platform/values/lint/kube-prometheus-stack.yaml |
+            kubeconform -strict -summary -skip CustomResourceDefinition \
+              -schema-location default -schema-location "$CRD_CATALOG"
+
+      - name: dashboards parse as JSON
+        run: |
+          for f in infra/cluster/platform/dashboards/*.json; do
+            python3 -m json.tool "$f" > /dev/null
+            echo "ok  $f"
+          done
+
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: shellcheck
+
+      # -x so the shared library under scripts/lib is followed rather than reported
+      # as unfollowable.
+      - name: shellcheck
+        run: |
+          mapfile -t files < <(find scripts test bench -name '*.sh' -type f | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no shell scripts found"
+            exit 1
+          fi
+          shellcheck -x "${files[@]}"
+
+  markdown:
+    name: markdownlint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: markdownlint-cli2
+
+      # The globs are given here rather than left to the config file. A vendored
+      # module's README is not this project's prose and its line lengths are not this
+      # project's problem.
+      - name: markdownlint
+        run: |
+          markdownlint-cli2 '**/*.md' '!**/.terraform/**' '!**/node_modules/**' '!.tflint.d/**'
+
+  actions:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: actionlint shellcheck
+
+      # actionlint shells out to shellcheck for the `run:` blocks, so this file is
+      # checked as both YAML and shell.
+      - name: actionlint
+        run: actionlint -color
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: gitleaks
+
+      # `dir` is the documented command for scanning a working tree at 8.30.1, and it is
+      # what `detect --no-git -s .` became. `detect` still resolves as a hidden
+      # compatibility alias, which is not something to build on in a repository whose
+      # point is that versions do not move underneath it.
+      #
+      # The scope is not the same as the pre-commit hook's, and it should not be read as
+      # such. The hook's entry at v8.30.1 is `gitleaks git --pre-commit --staged`, so it
+      # sees the staged diff; this sees every file on disk, tracked or not. Same ruleset
+      # in scripts/gitleaks.toml, so a finding is a finding in both, but an untracked or
+      # unstaged file is caught only here.
+      #
+      # --redact so that a finding does not itself become the leak, in a public build
+      # log.
+      - name: gitleaks
+        run: gitleaks dir --redact --config scripts/gitleaks.toml .
+
+  lambda:
+    name: kill lambda tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No mise here on purpose. The handler's tests use the standard library and
+      # unittest.mock only, with no network and no credentials, so the runner's own
+      # python3 is the honest thing to run them against: it is the closest available
+      # stand-in for a Lambda runtime this project does not otherwise pin.
+      - name: python3 -m unittest
+        working-directory: infra/guardrails/lambda
+        run: |
+          python3 --version
+          python3 -m unittest discover -v
+
+  integration:
+    name: kind integration suite
+    runs-on: ubuntu-24.04
+    # kind creates the cluster with --wait 5m and the suite itself is seconds of
+    # kubectl. Anything past this is a hung node image pull, not slow work.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: kind kubectl helm
+
+      # The one check in the local set that needs a live API server. helm template and
+      # kubeconform render manifests and check them against schemas; this sends them to
+      # a real API server as server-side dry runs, which is what catches a field the
+      # API rejects, a name that is too long, or an immutable field set. Custom
+      # resources whose CRDs only exist on the real cluster report as skipped.
+      #
+      # scripts/test.sh builds the cluster, runs test/suite.sh against it and deletes it
+      # again. LLM_EKS_TEST_SKIP_WITHOUT_RUNTIME is deliberately not set: an
+      # ubuntu-24.04 runner has a docker daemon, and the day it stops having one this
+      # job should turn red rather than print a skip that reads like a pass.
+      - name: kind integration suite
+        run: ./scripts/test.sh
+
+  authorship:
+    name: authorship
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The author writes in their own voice and this repository is public, so a slip
+      # would be visible and hard to take back. The first letter of each alternative
+      # sits in a one-character class so that this line does not match itself, the
+      # same trick as `ps aux | grep [s]shd`. scripts/lint.sh and scripts/wiki-sync.sh
+      # carry the same check.
+      - name: no machine-authorship claims anywhere in the tree
+        run: |
+          if grep -rniE '[c]laude|[a]nthropic|ai-[g]enerated|ai-[a]ssisted' . \
+               --exclude-dir=.git --exclude-dir=.terraform --exclude-dir=.tflint.d; then
+            echo "::error::the lines above claim an authorship this repository does not claim"
+            exit 1
+          fi
+          echo "clean"

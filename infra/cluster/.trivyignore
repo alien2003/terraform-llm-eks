@@ -1,0 +1,44 @@
+# Accepted `trivy config` findings for infra/cluster.
+#
+# Every id below is raised against source inside a downloaded module, not against
+# a file in this directory, so an inline `#trivy:ignore` comment cannot reach it.
+# Each is a decision with a reason, not an oversight.
+#
+# Trivy reads this file when it is run with this directory as the working
+# directory. `mise run lint` does that; so does `cd infra/cluster && trivy config .`.
+
+# Control plane controllerManager and scheduler logs are off. CloudWatch Logs bills
+# per GB ingested and those two are the chatty pair. api, audit and authenticator
+# are on and are what a post-mortem needs. Rule 2.
+AVD-AWS-0038
+
+# No customer-managed KMS key on the cluster, so no `encryption_config` block, which
+# is what this check looks for. Kubernetes API data is still envelope-encrypted: from
+# Kubernetes 1.28 EKS does that by default with an AWS-owned key, which carries no
+# charge. A customer-managed key bills per key per month for as long as it exists and
+# cannot be removed from a cluster once added. See eks.tf and ADR 0036.
+AVD-AWS-0039
+
+# The Kubernetes API endpoint is public. The alternative is a bastion instance or an
+# EKS interface endpoint, both of which bill by the hour for the whole window.
+AVD-AWS-0040
+
+# endpoint_public_access_cidrs defaults to 0.0.0.0/0 because the operator's address
+# is not known at plan time. The variable exists so a window can narrow it.
+AVD-AWS-0041
+
+# Unrestricted egress on the node security group, from the eks module's recommended
+# rules. Nodes pull images and model weights out through the NAT gateway, and an
+# egress allowlist here would be a list of AWS prefix lists that changes without
+# warning.
+AVD-AWS-0104
+
+# VPC flow logs are off by default. Delivery bills per GB ingested and per GB stored
+# for the life of the VPC. enable_vpc_flow_logs turns them on for a window that
+# needs them.
+AVD-AWS-0178
+
+# The Karpenter controller policy allows iam:PassRole. Karpenter cannot launch a
+# node without passing the node role to EC2, and the module scopes it to the node
+# role it created.
+AVD-AWS-0342

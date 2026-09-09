@@ -1,0 +1,9 @@
+apiVersion: v2
+name: llm-eks-secrets
+description: External Secrets store and the secrets the platform layer pulls out of AWS Secrets Manager.
+type: application
+version: 0.1.0
+appVersion: "2.10.0"
+home: https://external-secrets.io/
+sources:
+  - https://external-secrets.io/latest/provider/aws-secrets-manager/

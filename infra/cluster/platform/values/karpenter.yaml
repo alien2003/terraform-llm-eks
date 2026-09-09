@@ -1,0 +1,49 @@
+# Karpenter controller.
+#
+# Values verified against the chart's own values.yaml at version 1.14.1, pulled
+# from oci://public.ecr.aws/karpenter/karpenter.
+#
+# The $${...} placeholders are filled by templatefile() in karpenter.tf. The file
+# is still valid YAML with them in place, which is what lets `helm lint` and
+# `helm template` read it directly with no cluster and no Terraform.
+
+# Two replicas with the chart's default hostname anti-affinity, so the controller
+# survives losing one system node. Karpenter cannot reschedule the node Karpenter
+# itself runs on, which is why the managed node group is on demand.
+replicas: 2
+
+serviceAccount:
+  create: true
+  # Half of the EKS Pod Identity association the cluster stack created. Change it
+  # here and the controller silently loses its AWS credentials.
+  name: "${karpenter_service_account}"
+
+# The controller belongs on the managed node group, never on a node it provisioned
+# itself. The chart's default nodeSelector (kubernetes.io/os: linux) is merged with
+# this one rather than replaced.
+nodeSelector:
+  "${system_label_key}": "${system_label_value}"
+
+settings:
+  clusterName: "${cluster_name}"
+  clusterEndpoint: "${cluster_endpoint}"
+  # SQS queue the cluster stack created. Spot interruption notices, rebalance
+  # recommendations and scheduled-change events arrive here; without it a GPU node
+  # is reclaimed with no drain, which for this project is the difference between a
+  # graceful shutdown and a lost benchmark run.
+  interruptionQueue: "${interruption_queue}"
+
+# Scraped by the kube-prometheus-stack Prometheus. The Prometheus is configured to
+# select ServiceMonitors from every namespace, so no extra label is needed here.
+serviceMonitor:
+  enabled: true
+
+controller:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+logLevel: info

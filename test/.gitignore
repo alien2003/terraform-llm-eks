@@ -1,0 +1,5 @@
+# Workspace-local kubeconfig, redirected here from ~/.kube/config by scripts/test.sh so
+# that nothing this repository runs writes outside its own checkout. Same reason as the
+# .tflint.d/ entry in the root .gitignore. It holds a kind cluster's client certificate
+# and must never be committed.
+.kube/
