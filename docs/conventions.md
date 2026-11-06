@@ -1,8 +1,8 @@
 # Conventions
 
-Names, tags, layout and the decision-record process. These are fixed because they are referenced across
-stacks and scripts, and an inconsistency in any of them costs more than it saves. If something here is
-wrong, change it here first and then in the code.
+Names, tags, layout, how a change reaches `main`, and the decision-record process. These are fixed
+because they are referenced across stacks and scripts, and an inconsistency in any of them costs more
+than it saves. If something here is wrong, change it here first and then in the code.
 
 ## Naming
 
@@ -104,6 +104,24 @@ docs/           this file, and the decision records
 Everything is run through `mise run <task>`. That is the whole interface, and documentation names a task
 rather than reproducing the command it runs. A command written into a document is a command that goes stale
 without anyone noticing.
+
+## Changes
+
+Nothing is committed straight to `main`. A change goes like this:
+
+1. A branch off `main`, named `<type>/<short-slug>` with the Conventional Commits type: `fix/`, `feat/`,
+   `docs/`, `build/`, `ci/`.
+2. Commits in Conventional Commits form, imperative mood, no trailers. Commit through
+   `mise exec -- git commit`. Outside mise the pre-commit hooks cannot find `gitleaks` or `terraform`, and
+   they fail rather than skip.
+3. `mise run lint` green locally before the push.
+4. A pull request against `main`, opened as a draft. CI runs on pull requests and on pushes to `main`,
+   not on pushes to other branches, so the pull request is where a branch gets its first CI run.
+5. Merged with **Rebase and merge** once CI is green, so the history on `main` stays linear and every
+   commit on it is one that was reviewed. The branch is deleted after the merge.
+
+One change per branch. A fix found while working on something else gets its own branch, unless it is
+small enough to belong in the same pull request and the description says so.
 
 ## Decision records
 

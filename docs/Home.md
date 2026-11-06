@@ -12,7 +12,8 @@ sync.
 The repository README explains what the project is, the three layers of the money-safety design, and the
 window protocol. It is the front door and this page is not a substitute for it.
 
-[Conventions](conventions.md) covers names, tags, the shape of a stack, and how decision records are written.
+[Conventions](conventions.md) covers names, tags, the shape of a stack, how a change reaches `main`,
+and how decision records are written.
 
 Each stack has its own README next to the code, which is where the exact commands and variables live:
 `infra/guardrails`, `infra/bootstrap`, `infra/cluster` and `infra/cluster/platform`.
