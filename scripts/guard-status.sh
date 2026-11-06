@@ -171,7 +171,7 @@ if run_ro ce get-anomaly-monitors --region "$BILLING_REGION" --output json; then
   if [ -n "$monitor_arn" ]; then
     check PASS "anomaly monitor" "$ANOMALY_MONITOR_NAME"
   else
-    check FAIL "anomaly monitor" "$ANOMALY_MONITOR_NAME not found (STATE.md open question 3: is Cost Anomaly Detection available on a Free Plan account?)"
+    check FAIL "anomaly monitor" "$ANOMALY_MONITOR_NAME not found (Cost Anomaly Detection is available on this account; AWS created a default monitor when Cost Explorer was enabled)"
   fi
 else
   check FAIL "anomaly monitor" "$(short "$RO_ERR")"
@@ -756,14 +756,27 @@ fi
 # The service has a single endpoint, in us-east-1.
 # https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/Welcome.html
 
+# Both plans carry the sign-up credits and spend them first. The difference is what
+# happens after: FREE closes the account, PAID bills the card. This account is PAID
+# (read in window 0, 2026-10-08), so what is checked is that the plan is ACTIVE and
+# that credits remain, not which plan it is. ADR 0057.
+# Valid values: FREE | PAID, and NOT_STARTED | ACTIVE | EXPIRED.
+# https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_freetier_GetAccountPlanState.html
 if run_ro freetier get-account-plan-state --region "$BILLING_REGION" --output json; then
   plan_type="$(printf '%s' "$RO_OUT" | jq -r '.accountPlanType // "unknown"')"
   plan_status="$(printf '%s' "$RO_OUT" | jq -r '.accountPlanStatus // "unknown"')"
-  plan_expiry="$(printf '%s' "$RO_OUT" | jq -r '.accountPlanRemainingCredits.amount // "n/a"')"
-  if [ "$plan_type" = "PAID" ]; then
-    check FAIL "free tier account plan" "the account is on the PAID plan — credits no longer apply and every threshold means real money"
+  plan_credits="$(printf '%s' "$RO_OUT" | jq -r '.accountPlanRemainingCredits.amount // "n/a"')"
+  plan_summary="$plan_type, $plan_status, remaining credits $plan_credits"
+  if [ "$plan_type" != "FREE" ] && [ "$plan_type" != "PAID" ]; then
+    check FAIL "free tier account plan" "unrecognised plan type: $plan_summary"
+  elif [ "$plan_status" != "ACTIVE" ]; then
+    check FAIL "free tier account plan" "the plan is not ACTIVE: $plan_summary"
+  elif ! printf '%s' "$RO_OUT" | jq -e '(.accountPlanRemainingCredits.amount // 0) > 0' >/dev/null; then
+    check FAIL "free tier account plan" "no credits remain: $plan_summary"
+  elif [ "$plan_type" = "PAID" ]; then
+    check PASS "free tier account plan" "$plan_summary. Spend past the credits bills the card."
   else
-    check PASS "free tier account plan" "$plan_type, $plan_status, remaining credits $plan_expiry"
+    check PASS "free tier account plan" "$plan_summary"
   fi
 else
   check FAIL "free tier account plan" "$(short "$RO_ERR")"

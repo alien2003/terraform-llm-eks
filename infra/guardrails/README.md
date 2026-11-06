@@ -297,7 +297,7 @@ both false on the budget's cost types, which is how AWS expresses "count what th
 The account holds Free Tier credits and the project treats credits as cash, so a budget that netted them
 off would read zero until the moment the credits ran out and then read the truth far too late.
 
-Whether AWS Budgets actually observes gross pre-credit usage on a Free Plan account is an open question,
+Whether AWS Budgets actually observes gross pre-credit usage on this account is an open question,
 recorded in `materials/journal/STATE.md`. Until it is answered by comparing `Budget.CalculatedSpend`
 against `ce get-cost-and-usage` with `UnblendedCost`, the budget is a second opinion and the sweeper and
 the one-shot timer are the controls that actually stop spend. Any worst-case arithmetic should be written
