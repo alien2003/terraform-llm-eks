@@ -203,11 +203,12 @@ ScaledObject, ExternalSecret, ClusterSecretStore and ServiceMonitor. The number 
 and lint warns loudly whenever it takes it, because a partial check that looks like a full one is worse than
 no check at all.
 
-CI runs the same checks on every push and pull request, with one difference that is worth knowing about: it
-fails where the local script reports SKIP for a tool that is not installed, because on a build server a
-check that quietly did not run looks exactly like a check that passed. It also runs the one check that lint
-leaves out, `mise run test`: a kind cluster, and every chart pushed at its API server as a server-side dry
-run. Custom resources whose CRDs exist only on the real cluster report as skipped there, one line each.
+CI runs the same checks on every pull request and every push to `main`, with one difference that is worth
+knowing about: it fails where the local script reports SKIP for a tool that is not installed, because on a
+build server a check that quietly did not run looks exactly like a check that passed. It also runs the one
+check that lint leaves out, `mise run test`: a kind cluster, and every chart pushed at its API server as a
+server-side dry run. Custom resources whose CRDs exist only on the real cluster report as skipped there, one
+line each.
 
 CI holds no cloud credentials at all: no `configure-aws-credentials` step, no AWS secret, and no
 `id-token: write` permission, so the workflow cannot mint an OIDC token even if a future edit tried to. One
