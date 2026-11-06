@@ -68,7 +68,7 @@ the SMS subscription stays off until I tell Terraform that has been done. The bu
 action.
 
 These are the layer I trust least, and deliberately so. Billing data lags by hours, and whether AWS Budgets
-even observes pre-credit usage on a Free Plan account is an open question I intend to answer by measurement
+even observes pre-credit usage on this account is an open question I intend to answer by measurement
 rather than assumption. Alarms tell me something went wrong yesterday. The boundary and the timers are what
 stop it going wrong today.
 

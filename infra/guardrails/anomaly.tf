@@ -19,8 +19,11 @@
 # billing alarms and the budget action.
 # https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_AnomalySubscription.html
 #
-# Whether Cost Anomaly Detection is available at all on a Free Plan account is open
-# (STATE.md, open question 3). If the apply fails here, that is the answer.
+# Cost Anomaly Detection is available on this account: AWS created a default monitor
+# on its own when Cost Explorer was enabled. That monitor was deleted before window 0,
+# because an account gets one AWS managed monitor for AWS services and this one needs
+# the slot.
+# https://docs.aws.amazon.com/cost-management/latest/userguide/management-limits.html
 
 resource "aws_ce_anomaly_monitor" "services" {
   provider = aws.billing

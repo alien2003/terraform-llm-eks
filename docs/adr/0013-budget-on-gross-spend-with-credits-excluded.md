@@ -104,7 +104,7 @@ Reversing the action is an administrator job. The boundary denies the operator `
 against its own role, so an operator that has been stopped cannot un-stop itself. That is intentional and
 it will be inconvenient exactly once.
 
-Whether AWS Budgets observes gross pre-credit usage at all on a Free Plan account is undocumented and
+Whether AWS Budgets observes gross pre-credit usage at all on an account that holds credits is undocumented and
 still open. Until `Budget.CalculatedSpend` has been compared against `ce get-cost-and-usage` with
 `UnblendedCost` on this account, the budget is a second opinion, the sweeper and the one-shot window
 timer are the controls that actually stop spend, and any worst-case arithmetic is written against those.
