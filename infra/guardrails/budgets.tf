@@ -9,7 +9,7 @@
 # https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html
 # https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_budgets_CostTypes.html
 #
-# Whether Budgets observes gross pre-credit usage on a Free Plan account is still an
+# Whether Budgets observes gross pre-credit usage on this account is still an
 # open question (STATE.md, open question 2). Until it is answered the sweeper and the
 # one-shot window timer are the controls that actually stop spend, and the budget is
 # a second opinion.
