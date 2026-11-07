@@ -338,7 +338,7 @@ forecast notification, and the Cost Anomaly Detection digest.
 Three versions of this file got that wrong in three different ways, and every one of them would have cost
 a paid window. The budget's percentage notifications published to the topic, so with the default limit of
 100 dollars and the default first threshold of 25 percent, gross spend crossing 25 dollars would have torn
-down a running cluster while the action at 120 dollars sat untouched. The billing alarm had an
+down a running cluster while the budget action sat untouched. The billing alarm had an
 `ok_actions` on the same topic, which fires on the transition to OK: on a fresh account the metric does
 not exist yet, the alarm sits in `INSUFFICIENT_DATA`, and the first datapoint under the threshold moves it
 to OK a few hours into the first window with a GPU node running, so the guardrail would have killed the
