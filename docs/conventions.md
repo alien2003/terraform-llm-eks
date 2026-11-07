@@ -111,9 +111,15 @@ Nothing is committed straight to `main`. A change goes like this:
 
 1. A branch off `main`, named `<type>/<short-slug>` with the Conventional Commits type: `fix/`, `feat/`,
    `docs/`, `build/`, `ci/`.
-2. Commits in Conventional Commits form, imperative mood, no trailers. Commit through
-   `mise exec -- git commit`. Outside mise the pre-commit hooks cannot find `gitleaks` or `terraform`, and
-   they fail rather than skip.
+2. Commits in Conventional Commits form, imperative mood. Commit through `mise exec -- git commit`.
+   Outside mise the pre-commit hooks cannot find `gitleaks` or `terraform`, and they fail rather than
+   skip. A commit has no trailer, or exactly this one, and no other:
+
+   ```text
+   mise exec -- git commit -m '<type>: <subject>' \
+     --trailer 'Co-authored-by: pom1dor1ch <90519671+pom1dor1ch@users.noreply.github.com>'
+   ```
+
 3. `mise run lint` green locally before the push.
 4. A pull request against `main`, opened as a draft. CI runs on pull requests and on pushes to `main`,
    not on pushes to other branches, so the pull request is where a branch gets its first CI run.
