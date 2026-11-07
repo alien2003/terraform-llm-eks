@@ -124,9 +124,14 @@ variable "budget_notification_percentages" {
 }
 
 variable "budget_action_threshold_usd" {
-  description = "Gross spend in USD at which the budget action attaches the deny policy to the operator role."
+  description = <<-EOT
+    Gross spend in USD at which the budget action attaches the deny policy to the operator role.
+    It sits below the 100 USD of credits, so the last automatic stop fires while the credits still
+    cover the spend. The account is on the PAID plan, where spend past the credits bills the card.
+    ADR 0016.
+  EOT
   type        = number
-  default     = 120
+  default     = 90
 }
 
 variable "billing_alarm_threshold_usd" {

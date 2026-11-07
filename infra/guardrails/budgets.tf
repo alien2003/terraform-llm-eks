@@ -19,7 +19,7 @@
 # stop everything now. So a percentage notification sent to that topic is not a
 # notification at all, it is a teardown: with the default limit and percentages,
 # gross spend crossing 25 dollars would have killed a running window without anybody
-# asking for it and without the action at 120 dollars ever firing. The informational
+# asking for it and without the budget action ever firing. The informational
 # thresholds therefore go straight to the email subscriber, and the only publishers
 # left on the topic are the three signals that do mean stop now: the budget action,
 # the cumulative billing alarm in ALARM state, and the burn-rate alarm. The cost
