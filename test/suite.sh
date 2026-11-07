@@ -42,6 +42,12 @@ else
   die "no reachable Kubernetes API server. scripts/test.sh should have created one; run it rather than this file."
 fi
 
+# `kind create cluster --wait` waits for the control plane only. In CI the worker has
+# joined by then but is not yet Ready, and a check taken a second later failed on every
+# run since the first one. So the suite waits for every node, and the check below
+# reports whatever is still not Ready when the wait gives up.
+kubectl wait --for=condition=Ready nodes --all --timeout=120s >/dev/null 2>&1 || true
+
 not_ready="$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 != "Ready" { print $1 }')"
 node_count="$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 if [ -z "$not_ready" ] && [ "$node_count" -gt 0 ]; then
