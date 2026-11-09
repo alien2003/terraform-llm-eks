@@ -287,8 +287,9 @@ accidental launch of an accelerator family fail twice, once at the boundary and 
 of those defaults are zero. The two Standard entries are five, not zero, because five is what AWS ships:
 `All Standard (A, C, D, H, I, M, R, T, Z) Spot Instance Requests` and
 `Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances` both default to 5 vCPUs, and the
-system node group needs 4 of them, two nodes at 2 vCPUs each. So the targets for those two are 5 and no
-request is raised for either.
+system node group needs 4 of them, two nodes at 2 vCPUs each. The targets for those two were 5 until
+2026-11-09, when AWS had raised the account to 16 on-demand and 32 Spot on its own; lowering a quota is a
+support case, so the ceilings now follow the applied values (ADR 0017). No request is raised for either.
 
 ## Credits, and the thing this stack assumes
 

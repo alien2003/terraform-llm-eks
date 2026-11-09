@@ -1,6 +1,6 @@
 # 0011. The instance whitelist and the Spot-only GPU rule live in the permission boundary
 
-Status: accepted
+Status: accepted. The two Standard quota ceilings it describes at 5 vCPUs are 16 and 32 since ADR 0017.
 Date: 2026-09-08
 Revised: 2026-09-09
 
