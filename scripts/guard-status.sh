@@ -634,8 +634,10 @@ if [ -n "$QUOTA_TARGETS" ]; then
   for service in $services; do
     if run_ro service-quotas list-aws-default-service-quotas --service-code "$service" \
          --region "$WORK_REGION" --output json; then
-      DEFAULTS_ALL="$(jq -n --argjson acc "$DEFAULTS_ALL" --argjson new "$(printf '%s' "$RO_OUT" | jq '.Quotas')" \
-        '$acc + $new')"
+      # Both lists go through stdin: the EC2 default list alone is larger than the kernel's
+      # 128 KiB limit on a single argument, so --argjson fails with "Argument list too long".
+      DEFAULTS_ALL="$( { printf '%s\n' "$DEFAULTS_ALL"; printf '%s' "$RO_OUT" | jq '.Quotas'; } |
+        jq -s 'add')"
     else
       defaults_ok=0
       check FAIL "quota discovery ($service)" "$(short "$RO_ERR")"

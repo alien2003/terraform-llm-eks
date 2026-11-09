@@ -301,16 +301,16 @@ variable "quota_targets" {
     standard_spot = {
       service_code = "ec2"
       quota_name   = "All Standard (A, C, D, H, I, M, R, T, Z) Spot Instance Requests"
-      target       = 5
+      target       = 32
       direction    = "ceiling"
-      note         = "System nodes when they run on Spot. Stays at the documented default of 5; two 2-vCPU nodes need 4."
+      note         = "System nodes when they run on Spot. AWS raised the account from the default 5 to 32 on its own between 2026-10-08 and 2026-11-09; lowering is a support case, so the ceiling follows the applied value. See ADR 0017."
     }
     standard_ondemand = {
       service_code = "ec2"
       quota_name   = "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances"
-      target       = 5
+      target       = 16
       direction    = "ceiling"
-      note         = "System nodes carrying Karpenter, CoreDNS and monitoring. Default of 5 covers two 2-vCPU nodes."
+      note         = "System nodes carrying Karpenter, CoreDNS and monitoring. AWS raised the account from the default 5 to 16 on its own between 2026-10-08 and 2026-11-09; lowering is a support case, so the ceiling follows the applied value. See ADR 0017."
     }
     p_spot = {
       service_code = "ec2"

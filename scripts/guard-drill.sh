@@ -268,8 +268,19 @@ sim() {
   matched="$(printf '%s' "$out" |
     jq -r '[.EvaluationResults[0].MatchedStatements[]?.SourcePolicyId] | unique | join(",")')"
 
+  # A case that matched no statement at all and came back implicitDeny is not made
+  # inconclusive by missing keys. Observed on the live account (window 0, 2026-11-09):
+  # for such a case the simulator lists every condition key in the policy set, not the
+  # keys of a matched statement. A missing key could only change the answer by letting a
+  # conditional Allow match, and the only conditional Allows are on iam:PassRole, so
+  # that action keeps the strict rule.
+  local lenient=0
+  if [ "$decision" = "implicitDeny" ] && [ -z "$matched" ] && [ "$action" != "iam:PassRole" ]; then
+    lenient=1
+  fi
+
   local unresolved="" key allowed found
-  if [ -n "$missing" ]; then
+  if [ -n "$missing" ] && [ "$lenient" -eq 0 ]; then
     local -a missing_list=()
     IFS=',' read -r -a missing_list <<<"$missing"
     for key in ${missing_list[@]+"${missing_list[@]}"}; do
@@ -475,10 +486,12 @@ sim allowed ec2:CreateTags "arn:${PARTITION}:ec2:${WORK_REGION}:${ACCOUNT}:insta
     "ContextKeyName=aws:RequestTag/Project,ContextKeyValues=$PROJECT_TAG,ContextKeyType=string"
 
 # --- EKS Auto Mode, which reaches running compute through a service principal the
-#     instance whitelist never evaluates.
-sim explicitDeny eks:CreateCluster "arn:${PARTITION}:eks:${WORK_REGION}:${ACCOUNT}:cluster/auto" \
+#     instance whitelist never evaluates. The resource is "*": the simulator matches no
+#     statement for eks:CreateCluster on a cluster ARN and answers implicitDeny for
+#     both cases (window 0, 2026-11-09); with "*" both give the expected decision.
+sim explicitDeny eks:CreateCluster "*" \
     "ContextKeyName=eks:computeConfigEnabled,ContextKeyValues=true,ContextKeyType=boolean"
-sim allowed eks:CreateCluster "arn:${PARTITION}:eks:${WORK_REGION}:${ACCOUNT}:cluster/${NAME_PREFIX}" \
+sim allowed eks:CreateCluster "*" \
     "ContextKeyName=eks:computeConfigEnabled,ContextKeyValues=false,ContextKeyType=boolean"
 
 # --- CreateFleet, which is how Karpenter launches and therefore the path that matters
@@ -622,7 +635,10 @@ else
   launch allowed "system on Spot, t3.medium"     t3.medium   spot      yes
   launch denied  "not whitelisted, p5.48xlarge"  p5.48xlarge spot      yes
   launch denied  "not whitelisted, m5.24xlarge"  m5.24xlarge on-demand yes
-  launch denied  "not whitelisted, x2gd.16xlarge" x2gd.16xlarge spot   yes
+  # x86 on purpose: the matrix AMI is x86_64, and EC2 rejects an arm64 type such as
+  # x2gd with InvalidParameterValue before IAM is evaluated, so the case gave no
+  # verdict (window 0, 2026-11-09).
+  launch denied  "not whitelisted, x2iedn.32xlarge" x2iedn.32xlarge spot yes
   # An untagged instance is invisible to the sweeper and to the audit task, which is
   # a worse failure than a launch that does not happen.
   launch denied  "whitelisted but untagged"      t3.medium   on-demand no
