@@ -89,6 +89,12 @@ BILLING_ALARM_NAME="${NAME_PREFIX}-estimated-charges"
 ANOMALY_MONITOR_NAME="${NAME_PREFIX}-service-monitor"
 ANOMALY_SUBSCRIPTION_NAME="${NAME_PREFIX}-anomaly-alerts"
 QUOTA_TARGETS_PARAMETER="/${NAME_PREFIX}/guardrails/quota-targets"
+# The Grafana administrator secret, created by window-up.sh and deleted by
+# window-down.sh (ADR 0042, ADR 0059).
+GRAFANA_SECRET_NAME="${NAME_PREFIX}-grafana-admin"
+# The kubeconfig a window writes. Inside the checkout and gitignored, never ~/.kube
+# (workspace rules, Rule 1). mise.toml sets KUBECONFIG to the same path.
+WINDOW_KUBECONFIG="$REPO_ROOT/.kube/config"
 readonly PROJECT_TAG NAME_PREFIX OPERATOR_ROLE_NAME OPERATOR_BOUNDARY_NAME
 readonly ADMIN_ROLE_NAME BASE_USER_NAME ALERT_TOPIC_NAME BUDGET_NAME
 readonly KILL_FUNCTION_NAME SWEEPER_SCHEDULE_NAME WINDOW_GROUP_NAME

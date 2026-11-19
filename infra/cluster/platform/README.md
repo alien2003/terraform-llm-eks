@@ -185,8 +185,8 @@ exist, so `mise run bench` brings the deployment up before it sends traffic.
 ## Model weights
 
 The init container runs `aws s3 sync` from `s3://<weights bucket>/models/<model id>/` onto the node's
-root volume, with credentials from Pod Identity. The mirror step has to have put them there first;
-this module reads the bucket and never writes to it.
+root volume, with credentials from Pod Identity. `scripts/weights.sh` puts them there,
+from `mise run up` (ADR 0059); this module reads the bucket and never writes to it.
 
 The default model is `Qwen/Qwen2.5-7B-Instruct`, Apache-2.0 and ungated, so the weights can be
 mirrored without a token. `model_max_len` and `gpu_memory_utilization` are variables because weights

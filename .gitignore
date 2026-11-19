@@ -59,3 +59,10 @@ __pycache__/
 # pre-commit hook-repository cache, redirected here from ~/.cache/pre-commit
 # by mise.toml for the same reason as .tflint.d (the workspace rules, Rule 1)
 .pre-commit-cache/
+
+# The kubeconfig a cloud window writes (mise.toml KUBECONFIG). Holds the cluster
+# endpoint and CA; it belongs to one window and to nobody's repository.
+.kube/
+
+# Terraform plan files, if one is ever written next to a stack by hand.
+*.tfplan

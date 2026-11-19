@@ -102,7 +102,27 @@ for stack in $DESTROY_STACKS; do
   # A destroy that fails is not fatal here. The audit that follows is what decides
   # whether the window can close, and it looks at the account rather than at
   # Terraform's opinion of the account.
-  if ! terraform -chdir="$dir" destroy -input=false -auto-approve; then
+  # infra/cluster's destroy has to be given the same two inputs its apply was
+  # (ADR 0037, ADR 0059). Variable validation runs on a destroy too, so with the
+  # platform layer on it needs a Grafana secret ARN, and with the platform layer
+  # never applied it must run as phase 1, or the kubernetes provider is configured
+  # against a cluster that may not exist.
+  destroy_args=(-input=false -auto-approve)
+  if [ "$stack" = "infra/cluster" ]; then
+    phase="$(terraform -chdir="$dir" output -raw platform_enabled 2>/dev/null || true)"
+    if [ "$phase" = "true" ]; then
+      secret_arn="$(aws_ro secretsmanager describe-secret --secret-id "$GRAFANA_SECRET_NAME"         --region "$WORK_REGION" --query 'ARN' --output text 2>/dev/null || true)"
+      if [ -z "$secret_arn" ] || [ "$secret_arn" = "None" ]; then
+        # Only the format is validated, and a destroy reads nothing through it.
+        secret_arn="arn:$(partition):secretsmanager:$WORK_REGION:$(account_id):secret:$GRAFANA_SECRET_NAME-absent"
+      fi
+      destroy_args+=(-var "grafana_admin_secret_arn=$secret_arn")
+    else
+      destroy_args+=(-var platform_enabled=false)
+    fi
+  fi
+
+  if ! terraform -chdir="$dir" destroy "${destroy_args[@]}"; then
     error "terraform destroy failed in $stack."
     destroy_failed=1
   fi
@@ -111,6 +131,23 @@ done
 if [ "$destroy_failed" -ne 0 ]; then
   warn "at least one destroy failed. Continuing to the audit, which is the check that matters."
 fi
+
+# ------------------------------------------------------------------ 1b. window-scoped leftovers
+#
+# The Grafana secret is created by window-up.sh rather than by Terraform (ADR 0059),
+# so the destroy above does not remove it. Deleted without a recovery window: a
+# secret pending deletion still exists, still bills, and is still found by the audit.
+# Only after the destroy, because External Secrets reads it until the platform is gone.
+if aws_ro secretsmanager describe-secret --secret-id "$GRAFANA_SECRET_NAME" \
+     --region "$WORK_REGION" >/dev/null 2>&1; then
+  if aws_write secretsmanager delete-secret --secret-id "$GRAFANA_SECRET_NAME" \
+       --region "$WORK_REGION" --force-delete-without-recovery >/dev/null; then
+    check PASS "grafana secret" "$GRAFANA_SECRET_NAME deleted"
+  else
+    error "could not delete $GRAFANA_SECRET_NAME; the audit will report it."
+  fi
+fi
+rm -f "$WINDOW_KUBECONFIG"
 
 # ------------------------------------------------------------------ 2. audit
 
