@@ -49,6 +49,12 @@ GIT_COMMITTER_EMAIL = "alien2003@protonmail.ch"
 PROJECT_TAG = "terraform-llm-eks"
 TF_IN_AUTOMATION = "1"
 
+# The kubeconfig a cloud window writes, inside the checkout and gitignored. Without
+# this, `aws eks update-kubeconfig` and kubectl default to ~/.kube/config, which is
+# outside the workspace (Rule 1). scripts/test.sh points its kind cluster elsewhere
+# on purpose and overrides this.
+KUBECONFIG = "{{config_root}}/.kube/config"
+
 # Rule 1: tflint defaults to ~/.tflint.d, which is outside the workspace. Keep its
 # plugins inside the repo instead (gitignored).
 TFLINT_PLUGIN_DIR = "{{config_root}}/.tflint.d/plugins"

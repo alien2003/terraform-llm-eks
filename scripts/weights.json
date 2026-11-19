@@ -1,0 +1,88 @@
+{
+  "_comment": [
+    "The model the inference deployment serves, pinned to one Hugging Face commit, with",
+    "every file it needs and how to verify it. scripts/weights.sh reads this file and",
+    "nothing else; no model id, revision or hash is written anywhere in scripts/.",
+    "",
+    "model_id must equal the model_id default in infra/cluster/platform/variables.tf,",
+    "because the bucket prefix the init container syncs from is models/<model_id>.",
+    "weights.sh checks that before it does anything.",
+    "",
+    "sha256 is the LFS object hash Hugging Face publishes for large files. git_blob is",
+    "the git object id for the small ones, checked with git hash-object. Both were read",
+    "from the API URL in source_url on sourced_on; .gitattributes is left out because",
+    "vLLM never reads it."
+  ],
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+  "license": "Apache-2.0",
+  "source_url": "https://huggingface.co/api/models/Qwen/Qwen2.5-7B-Instruct/revision/a09a35458c702b33eeacc393d103063234e8bc28?blobs=true",
+  "sourced_on": "2026-11-19",
+  "files": [
+    {
+      "name": "LICENSE",
+      "size": 11343,
+      "git_blob": "6634c8cc3133b3848ec74b9f275acaaa1ea618ab"
+    },
+    {
+      "name": "README.md",
+      "size": 6240,
+      "git_blob": "4e9536cebaeb5cac673952ad5d0eeae469900f81"
+    },
+    {
+      "name": "config.json",
+      "size": 663,
+      "git_blob": "0178295f88afc3c7f279ed284f961f8c1be00654"
+    },
+    {
+      "name": "generation_config.json",
+      "size": 243,
+      "git_blob": "0eb3c536657dcd12626e09eca4b6198c0cbcde1e"
+    },
+    {
+      "name": "merges.txt",
+      "size": 1671839,
+      "git_blob": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0"
+    },
+    {
+      "name": "model-00001-of-00004.safetensors",
+      "size": 3945441440,
+      "sha256": "a1333e6293854747c481288ea83b348226af178dd565c49b6f9495ba1966aba7"
+    },
+    {
+      "name": "model-00002-of-00004.safetensors",
+      "size": 3864726352,
+      "sha256": "f5d25a2772cb825164a2a2c0fb6d51a87e282abf21e4dd75bc5cfb3cd0ea6185"
+    },
+    {
+      "name": "model-00003-of-00004.safetensors",
+      "size": 3864726424,
+      "sha256": "8efdec4c1bc12317ae1a38dc42b595ce777738a64deea3fcb8a0a91381bcdfd5"
+    },
+    {
+      "name": "model-00004-of-00004.safetensors",
+      "size": 3556377672,
+      "sha256": "1a72d403cdf0c1ec3cb7f289f17b394a01e64394c2e9b3c0f94dbce3faf879bd"
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "size": 27752,
+      "git_blob": "14d037fdda5a1311dcc0275003a7a370d84114e6"
+    },
+    {
+      "name": "tokenizer.json",
+      "size": 7031645,
+      "git_blob": "443909a61d429dff23010e5bddd28ff530edda00"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "size": 7305,
+      "git_blob": "07bfe0640cb5a0037f9322287fbfc682806cf672"
+    },
+    {
+      "name": "vocab.json",
+      "size": 2776833,
+      "git_blob": "4783fe10ac3adce15ac8f358ef5462739852c569"
+    }
+  ]
+}

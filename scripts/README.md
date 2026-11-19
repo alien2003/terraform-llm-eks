@@ -248,6 +248,13 @@ message.
 
 #### What it applies, and in what order
 
+ADR 0059 has the full sequence. In short: before the timer, it checks that the model weights are in
+the bucket or in a verified local copy. After the timer, every apply is of a saved plan file that was
+summarised and confirmed: `infra/bootstrap`, then `infra/cluster` with `platform_enabled=false`
+(ADR 0037), then a kubeconfig at `.kube/config` and the Grafana secret, then `infra/cluster` again with
+the secret's ARN. The weights upload runs in the background during the first cluster phase and is
+waited for before the second.
+
 `infra/bootstrap`, then `infra/cluster`. That is a dependency chain, not a list: bootstrap creates
 the Terraform state bucket that `infra/cluster`'s backend lives in, so a cluster apply before it has
 nowhere to keep its state. The script says so plainly rather than letting the raw backend error
@@ -259,6 +266,12 @@ stack calls it.
 
 `infra/guardrails` is not in the list either, and must not be. It is applied with the admin profile
 in window 0 and destroyed with the admin profile in the final window.
+
+### weights.sh
+
+`fetch`, `verify`, `remote`, `push`. Downloads the model at the commit pinned in `weights.json`, checks
+every file against its published hash, and uploads it to the weights bucket from inside a window.
+`fetch` and `verify` make no AWS call and can run any time. ADR 0059.
 
 ### window-down.sh
 

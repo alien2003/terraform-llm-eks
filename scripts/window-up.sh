@@ -22,7 +22,9 @@
 #      safety property: if the apply hangs, if the session dies, if the human walks
 #      away, the timer still fires and the kill Lambda still terminates everything.
 #      Arming after the apply would leave a hole exactly the width of the apply.
-#   6. Only then, terraform apply, bootstrap before cluster.
+#   6. Only then, plan and apply, one confirmed plan file at a time: bootstrap,
+#      cluster phase 1, the Grafana secret and kubeconfig, cluster phase 2, with the
+#      weights uploading in the background (ADR 0037, ADR 0059).
 #
 # Running it twice is safe. An already-armed timer is reported and left alone rather
 # than pushed further into the future: extending a window needs a new approval
@@ -33,7 +35,7 @@ set -euo pipefail
 # shellcheck source=scripts/lib/common.sh
 . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-require_cmd aws jq terraform
+require_cmd aws jq terraform git
 
 MIN_WINDOW_HOURS=0.25
 
@@ -250,6 +252,22 @@ cat >&2 <<EOF
   figure; they go into materials/costs/windows.md after the window, from Cost Explorer.
 EOF
 
+# ------------------------------------------------------------------ 3b. weights
+#
+# Checked before anything is armed: the inference pod needs the weights in the bucket,
+# and a window that finds out after the cluster is up has paid for a cluster that
+# cannot serve. Either the bucket already holds them (every window after the first),
+# or a verified local copy exists for step 5 to upload (ADR 0059).
+info ""
+info "step 3b: model weights"
+if "$REPO_ROOT/scripts/weights.sh" remote >/dev/null 2>&1; then
+  check PASS "weights" "already in the bucket"
+elif "$REPO_ROOT/scripts/weights.sh" verify >/dev/null 2>&1; then
+  check PASS "weights" "verified local copy, uploaded in step 5"
+else
+  die "the weights are neither in the bucket nor in a verified local copy. Run 'scripts/weights.sh fetch' first; it needs no AWS and no window. Nothing was armed."
+fi
+
 if ! confirm "Open window $WINDOW_ID for ${WINDOW_HOURS}h at up to \$$projected_ceiling (ceiling, not steady state)?"; then
   die "not confirmed. Nothing was armed and nothing was applied."
 fi
@@ -288,6 +306,13 @@ if printf '%s\n' "$existing" | grep -Fxq "$TIMER_NAME"; then
     --region "$WORK_REGION" --query 'ScheduleExpression' --output text)"
   fire_at="${fire_expr#at(}"
   fire_at="${fire_at%)}"
+  # A fired one-shot timer stays listed, because it is created with
+  # ActionAfterCompletion NONE (ADR 0051). Matching on the name alone would apply under
+  # a timer that has already gone off, with nothing left to stop the window.
+  now_utc="$(date -u '+%Y-%m-%dT%H:%M:%S')"
+  if [[ "$fire_at" < "$now_utc" || "$fire_at" == "$now_utc" ]]; then
+    die "the timer $TIMER_NAME already fired at ${fire_at}Z. This window is over: run 'mise run down', and open a new window with a new approval message."
+  fi
   warn "window $WINDOW_ID is already armed and fires at ${fire_at}Z. Leaving it alone."
   warn "Extending a window is a new approval message, not a second 'mise run up'."
 else
@@ -363,54 +388,80 @@ info "step 5/6: terraform apply"
 # Bootstrap holds the state bucket every other stack's backend lives in, and it is
 # expected to survive between windows; destroying it from `mise run down` would delete
 # the state of the stack being destroyed while the destroy was running.
-APPLY_STACKS="${LLM_EKS_APPLY_STACKS:-infra/bootstrap infra/cluster}"
-
 STATE_BUCKET="${NAME_PREFIX}-tfstate-${ACCOUNT}"
 
-for stack in $APPLY_STACKS; do
-  dir="$REPO_ROOT/$stack"
-  [ -d "$dir" ] || die "no such stack: $stack"
+# plan_and_apply <stack dir> [terraform -var arguments...]
+#
+# Rule 2b puts `terraform plan` before every apply, and until ADR 0059 that lived in
+# the window plan as a step somebody had to remember. Now the plan is written to a
+# file, summarised, confirmed, and exactly that file is applied, so what the human
+# agreed to and what runs cannot drift apart between the two commands.
+plan_and_apply() {
+  local dir="$1"; shift
+  local rel="${dir#"$REPO_ROOT"/}" planfile summary deletes
 
   info ""
-  info "--- $stack"
+  info "--- $rel $*"
 
   # A stack with an S3 backend cannot init before the bucket exists, and the raw
-  # backend error for that is a wall of text about workspaces. Say it plainly instead,
-  # and say which stack was supposed to have created it.
-  #
+  # backend error for that is a wall of text about workspaces. Say it plainly instead.
   # The bucket name is read out of the backend block rather than derived, because a
-  # backend block cannot take variables and the name in it is therefore a literal that
-  # can disagree with the account these credentials belong to. That disagreement is
-  # worth catching on its own: it means the checkout is pointed at somebody else's
-  # state.
+  # backend block cannot take variables and the literal in it can disagree with the
+  # account these credentials belong to, which means the checkout points at somebody
+  # else's state.
   if grep -Rqs 'backend "s3"' "$dir"/*.tf; then
+    local backend_bucket
     backend_bucket="$(sed -n 's/^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
       "$dir"/*.tf | head -n 1)"
     [ -n "$backend_bucket" ] || backend_bucket="$STATE_BUCKET"
-
     if [ "$backend_bucket" != "$STATE_BUCKET" ]; then
-      warn "$stack has its backend on $backend_bucket, but this account's state bucket"
+      warn "$rel has its backend on $backend_bucket, but this account's state bucket"
       warn "would be $STATE_BUCKET. One of the two is wrong; check before continuing."
     fi
-
-    if ! aws_ro s3api head-bucket --bucket "$backend_bucket" >/dev/null 2>&1; then
-      die "the Terraform state bucket $backend_bucket does not exist or is not readable, so $stack cannot initialise its backend. infra/bootstrap is what creates it and it is applied first in this list; if that apply was skipped or failed, fix it before going further. The timer is armed and nothing is running yet."
-    fi
+    aws_ro s3api head-bucket --bucket "$backend_bucket" >/dev/null 2>&1 ||
+      die "the Terraform state bucket $backend_bucket does not exist or is not readable, so $rel cannot initialise its backend. infra/bootstrap creates it and is applied first. The timer is armed; run 'mise run down'."
   fi
 
-  terraform -chdir="$dir" init -input=false ||
-    die "terraform init failed in $stack. The timer is armed; nothing is running yet."
+  terraform -chdir="$dir" init -input=false >/dev/null ||
+    die "terraform init failed in $rel. The timer is armed; run 'mise run down'."
 
-  apply_args=(-input=false -auto-approve)
-  # Resources created inside a window carry Window=<id> so that the audit task can
-  # tell one window's leftovers from another's. Only the stacks that declare the
-  # variable get it.
+  local plan_args=(-input=false)
   if grep -Rqs 'variable "window_id"' "$dir"/*.tf; then
-    apply_args+=(-var "window_id=$WINDOW_ID")
+    plan_args+=(-var "window_id=$WINDOW_ID")
   fi
 
-  if ! terraform -chdir="$dir" apply "${apply_args[@]}"; then
-    error "terraform apply failed in $stack."
+  planfile="$(mktemp "${TMPDIR:-/tmp}/llm-eks-plan.XXXXXX")"
+  if ! terraform -chdir="$dir" plan "${plan_args[@]}" "$@" -out="$planfile" >&2; then
+    rm -f "$planfile"
+    error "terraform plan failed in $rel."
+    log "The timer is armed, so nothing can outlive the window. Tear down first:"
+    log "    mise run down"
+    exit 1
+  fi
+
+  summary="$(terraform -chdir="$dir" show -json "$planfile" | jq -r '
+    [.resource_changes[]?.change.actions | join(",")] |
+    {create: map(select(. == "create")) | length,
+     update: map(select(. == "update")) | length,
+     replace: map(select(test("delete") and test("create"))) | length,
+     delete: map(select(. == "delete")) | length} |
+    "\(.create) \(.update) \(.replace) \(.delete)"')"
+  read -r n_create n_update n_replace n_delete <<<"$summary"
+  deletes=$((n_replace + n_delete))
+  info ""
+  info "plan for $rel: $n_create to create, $n_update to update, $n_replace to replace, $n_delete to destroy"
+  if [ "$deletes" -gt 0 ]; then
+    warn "this plan destroys or replaces $deletes resource(s). Read the plan above before answering."
+  fi
+
+  if ! confirm "Apply this plan to $rel?"; then
+    rm -f "$planfile"
+    die "not confirmed. The timer is armed; whatever is already applied stays until 'mise run down'."
+  fi
+
+  if ! terraform -chdir="$dir" apply -input=false "$planfile"; then
+    rm -f "$planfile"
+    error "terraform apply failed in $rel."
     log ""
     log "The timer is still armed, so nothing can survive the window even now. Tear down"
     log "first and investigate afterwards (workspace rules, Rule 2b):"
@@ -418,7 +469,89 @@ for stack in $APPLY_STACKS; do
     log "    mise run down"
     exit 1
   fi
-done
+  rm -f "$planfile"
+}
+
+# ensure_grafana_secret — print the ARN of the Grafana administrator secret, creating
+# it first if it does not exist. ADR 0042 keeps the password out of git, out of chart
+# values and out of Terraform state; ADR 0059 makes this the one place it is born.
+# The value goes through a 0600 file and `file://`, never through a command line,
+# where any process on the machine could read it, and it is never printed.
+ensure_grafana_secret() {
+  local arn tmp
+  if arn="$(aws_ro secretsmanager describe-secret --secret-id "$GRAFANA_SECRET_NAME" \
+       --region "$WORK_REGION" --query 'ARN' --output text 2>/dev/null)" && [ -n "$arn" ]; then
+    printf '%s' "$arn"
+    return 0
+  fi
+  tmp="$(mktemp "${TMPDIR:-/tmp}/llm-eks-grafana.XXXXXX")"
+  chmod 600 "$tmp"
+  jq -nc --arg p "$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-32)" \
+    '{username: "admin", password: $p}' >"$tmp"
+  # Tagged Stack=cluster so that `mise run audit` reports it if window-down ever fails
+  # to delete it: it belongs to this window, not to the stacks that outlive one.
+  arn="$(aws_write secretsmanager create-secret --name "$GRAFANA_SECRET_NAME" \
+    --region "$WORK_REGION" \
+    --description "Grafana administrator credentials for cloud window $WINDOW_ID. Deleted by mise run down." \
+    --secret-string "file://$tmp" \
+    --tags "Key=Project,Value=$PROJECT_TAG" "Key=Stack,Value=cluster" "Key=Window,Value=$WINDOW_ID" \
+    --query 'ARN' --output text)" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  printf '%s' "$arn"
+}
+
+CLUSTER_DIR="$REPO_ROOT/infra/cluster"
+
+# 5a. bootstrap: the state bucket every later stack's backend lives in, the weights
+#     bucket, the ECR cache rules. Local state (ADR 0020), so it can go first.
+plan_and_apply "$REPO_ROOT/infra/bootstrap"
+
+# 5b. The weights upload runs in the background while EKS is created, which is ~15
+#     minutes of otherwise idle window. Waited for before phase 2, because that is
+#     when the inference deployment first exists.
+WEIGHTS_LOG="$(mktemp "${TMPDIR:-/tmp}/llm-eks-weights.XXXXXX")"
+info ""
+info "--- weights: uploading in the background, log in $WEIGHTS_LOG"
+"$REPO_ROOT/scripts/weights.sh" push >"$WEIGHTS_LOG" 2>&1 &
+WEIGHTS_PID=$!
+
+# 5c. Cluster, phase 1 (ADR 0037): everything outside the cluster, with the
+#     kubernetes and helm providers pointed at a name that cannot resolve. Skipped
+#     when the state already holds phase 2, because applying platform_enabled=false
+#     over a running platform would plan to destroy every release in it.
+terraform -chdir="$CLUSTER_DIR" init -input=false >/dev/null ||
+  die "terraform init failed in infra/cluster. The timer is armed; run 'mise run down'."
+current_phase="$(terraform -chdir="$CLUSTER_DIR" output -raw platform_enabled 2>/dev/null || true)"
+if [ "$current_phase" = "true" ]; then
+  note "infra/cluster already holds the platform layer; skipping phase 1."
+else
+  plan_and_apply "$CLUSTER_DIR" -var platform_enabled=false
+fi
+
+# 5d. A kubeconfig inside the checkout, never ~/.kube (workspace rules, Rule 1).
+#     mise.toml points KUBECONFIG at the same file for every task.
+CLUSTER_NAME="$(terraform -chdir="$CLUSTER_DIR" output -raw cluster_name)"
+mkdir -p "$(dirname -- "$WINDOW_KUBECONFIG")"
+aws_ro eks describe-cluster --name "$CLUSTER_NAME" --region "$WORK_REGION" >/dev/null ||
+  die "cluster $CLUSTER_NAME is not readable after phase 1. Run 'mise run down'."
+command aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$WORK_REGION" \
+  --kubeconfig "$WINDOW_KUBECONFIG" >/dev/null ||
+  die "could not write $WINDOW_KUBECONFIG. Run 'mise run down'."
+check PASS "kubeconfig" "$WINDOW_KUBECONFIG"
+
+# 5e. The Grafana secret, then the weights, then phase 2.
+GRAFANA_SECRET_ARN="$(ensure_grafana_secret)" ||
+  die "could not create or read the $GRAFANA_SECRET_NAME secret. Run 'mise run down'."
+check PASS "grafana secret" "$GRAFANA_SECRET_NAME"
+
+if ! wait "$WEIGHTS_PID"; then
+  cat "$WEIGHTS_LOG" >&2
+  die "the weights upload failed; the inference pod would start on an empty model directory. Run 'mise run down', or fix the upload and run 'mise run up' again under the same timer."
+fi
+tail -n 1 "$WEIGHTS_LOG" >&2
+rm -f "$WEIGHTS_LOG"
+
+plan_and_apply "$CLUSTER_DIR" -var "grafana_admin_secret_arn=$GRAFANA_SECRET_ARN"
 
 # ------------------------------------------------------------------ 6. hand back
 
