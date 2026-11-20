@@ -63,6 +63,18 @@ repo_root() {
 REPO_ROOT="$(repo_root)"
 readonly REPO_ROOT
 
+# Scratch files stay in the workspace (workspace rules, Rule 1), beside the checkout
+# like the weights cache in ../.weights, and not inside it, where the linters and
+# gitleaks would scan whatever lands there. Every script here writes them with
+# `mktemp "${TMPDIR:-/tmp}/..."`, and so do terraform, helm and the AWS CLI, so
+# pointing TMPDIR here keeps plan files, the generated Grafana password and the
+# weights upload log out of the system /tmp, where window 1 found them (ADR 0060).
+# 0700 because the Grafana password passes through it.
+TMPDIR="${LLM_EKS_TMP_DIR:-$(cd -- "$REPO_ROOT/.." && pwd)/.tmp}"
+mkdir -p "$TMPDIR"
+chmod 0700 "$TMPDIR"
+export TMPDIR
+
 # The private working material lives beside the repository, never inside it.
 # Only guard-drill.sh writes here, and only under guardrails/. See scripts/README.md.
 MATERIALS_DIR="${LLM_EKS_MATERIALS_DIR:-$(cd -- "$REPO_ROOT/.." && pwd)/materials}"
@@ -278,8 +290,11 @@ confirm() {
   fi
   printf '%s%s%s [y/N] ' "$C_BOLD" "$prompt" "$C_RESET" >&2
   if [ -t 0 ]; then read -r reply; else read -r reply < /dev/tty; fi
+  # н and нуы are y and yes typed on the same keys in the Russian layout. In window 1
+  # an `н` on the phase-2 prompt read as no and cost a re-run under an armed timer
+  # (ADR 0060). Anything else is still no.
   case "$reply" in
-    y|Y|yes|YES) return 0 ;;
+    y|Y|yes|YES|н|Н|нуы|НУЫ) return 0 ;;
     *) return 1 ;;
   esac
 }

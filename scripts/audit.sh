@@ -69,6 +69,46 @@ orphan() { # orphan <region> <kind> <identifier> <detail>
   printf '%-12s %-22s %-46s %s\n' "$1" "$2" "$3" "$4" >>"$ORPHANS_FILE"
 }
 
+# ec2_resource_gone <region> <arn> — true only when EC2 itself says the resource does
+# not exist.
+#
+# GetResources is documented to return "all the tagged or previously tagged
+# resources", and in window 1 it went on listing a deleted security group and two
+# deleted ENIs for more than 35 minutes after the destroy, holding the window open
+# with nothing billing (ADR 0060). So a tagging hit for an EC2 resource is checked
+# against the service's own describe call before it counts.
+#
+# Deliberately one-sided: only an error code ending in `.NotFound` makes a resource
+# gone. Success, `Malformed`, AccessDenied, throttling, a type not in the table: all
+# of these leave it an orphan, because a false orphan costs a re-run and a false
+# "gone" costs money.
+# https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/API_GetResources.html
+# https://docs.aws.amazon.com/ec2/latest/devguide/errors-overview.html
+ec2_resource_gone() {
+  local region="$1" arn="$2" resource kind id op flag err
+  case "$arn" in arn:*:ec2:*) ;; *) return 1 ;; esac
+  resource="${arn##*:}"
+  kind="${resource%%/*}"
+  id="${resource#*/}"
+  case "$kind" in
+    security-group)    op=describe-security-groups    flag=--group-ids ;;
+    network-interface) op=describe-network-interfaces flag=--network-interface-ids ;;
+    subnet)            op=describe-subnets            flag=--subnet-ids ;;
+    vpc)               op=describe-vpcs               flag=--vpc-ids ;;
+    route-table)       op=describe-route-tables       flag=--route-table-ids ;;
+    network-acl)       op=describe-network-acls       flag=--network-acl-ids ;;
+    launch-template)   op=describe-launch-templates   flag=--launch-template-ids ;;
+    vpc-endpoint)      op=describe-vpc-endpoints      flag=--vpc-endpoint-ids ;;
+    internet-gateway)  op=describe-internet-gateways  flag=--internet-gateway-ids ;;
+    elastic-ip)        op=describe-addresses          flag=--allocation-ids ;;
+    *) return 1 ;;
+  esac
+  if err="$(aws_ro ec2 "$op" "$flag" "$id" --region "$region" --output json 2>&1 >/dev/null)"; then
+    return 1
+  fi
+  [[ "$err" =~ \(Invalid[A-Za-z]+\.NotFound\) ]]
+}
+
 heading "audit — $(date -u '+%Y-%m-%d %H:%M:%SZ')"
 
 if ! aws_available; then
@@ -357,8 +397,12 @@ for region in $REGIONS; do
             *:instance/*|*:volume/*|*:natgateway/*|*:loadbalancer/*|*:cluster/*|*:nodegroup/*|*:vpc-endpoint/*)
               ;;
             *)
-              check FAIL "cluster-stack leftover" "$arn"
-              orphan "$region" cluster-leftover "${arn##*:}" "$arn"
+              if ec2_resource_gone "$region" "$arn"; then
+                check WARN "stale tagging entry" "$arn — the tagging API still lists it, EC2 answers NotFound"
+              else
+                check FAIL "cluster-stack leftover" "$arn"
+                orphan "$region" cluster-leftover "${arn##*:}" "$arn"
+              fi
               ;;
           esac
           ;;
