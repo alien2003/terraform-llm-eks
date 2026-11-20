@@ -32,6 +32,12 @@ settings:
   # is reclaimed with no drain, which for this project is the difference between a
   # graceful shutdown and a lost benchmark run.
   interruptionQueue: "${interruption_queue}"
+  # Off, because the dry run cannot pass on a fresh install here (ADR 0047). The
+  # NodeClasses and NodePools arrive in one release; validation runs before the
+  # controller sees a NodePool, so its dry-run CreateFleet falls back to m5.large,
+  # the boundary's InstanceTypeWhitelist denies it, and the failure is cached for
+  # 30 minutes. The real CreateFleet is still decided by the same boundary.
+  disableDryRun: true
 
 # Scraped by the kube-prometheus-stack Prometheus. The Prometheus is configured to
 # select ServiceMonitors from every namespace, so no extra label is needed here.
