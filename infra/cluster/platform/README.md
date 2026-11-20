@@ -439,3 +439,7 @@ Written down here rather than assumed, because none of them can be checked witho
    Karpenter's documentation says it does; this is the one tag path the money-safety nets depend on, so
    it gets checked against a real instance with `describe-instances` rather than trusted. `mise run
    audit` finding the node is the same check from the other end.
+8. With `settings.disableDryRun: true` (ADR 0047) the EC2NodeClasses report `ValidationSucceeded=True`
+   without asking EC2, so the first real `CreateFleet` is the first permission check. If the boundary
+   refuses it, the NodeClaim's events carry the `UnauthorizedOperation` with the instance type that was
+   requested. Save `kubectl describe nodeclaim` either way.
