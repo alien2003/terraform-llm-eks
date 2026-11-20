@@ -17,6 +17,7 @@ Numbers are grouped by subject:
 | 0030 to 0039 | The cluster stack |
 | 0040 to 0049 | The platform layer |
 | 0050 to 0059 | Scripts, tasks and the test suite |
+| 0060 to 0069 | Scripts, tasks and the test suite, continued |
 
 Gaps in the numbering are normal. A number is never reused, so a record that was written and then dropped
 leaves a hole, and the hole is more honest than renumbering everything after it.

@@ -108,10 +108,20 @@ for stack in $DESTROY_STACKS; do
   # never applied it must run as phase 1, or the kubernetes provider is configured
   # against a cluster that may not exist.
   destroy_args=(-input=false -auto-approve)
+  platform_in_state=0
   if [ "$stack" = "infra/cluster" ]; then
-    phase="$(terraform -chdir="$dir" output -raw platform_enabled 2>/dev/null || true)"
-    if [ "$phase" = "true" ]; then
-      secret_arn="$(aws_ro secretsmanager describe-secret --secret-id "$GRAFANA_SECRET_NAME"         --region "$WORK_REGION" --query 'ARN' --output text 2>/dev/null || true)"
+    # The phase is read from the state, not from the platform_enabled output. A
+    # destroy that fails part way leaves the platform's resources in state but can
+    # drop the outputs, and window 1's second `down` then ran as phase 1 against
+    # kubernetes.invalid with namespaces still to delete (ADR 0060). What is in
+    # state is what the destroy has to be able to reach.
+    if ! state="$(terraform -chdir="$dir" state list 2>/dev/null)"; then
+      state=""
+    fi
+    if grep -q '^module\.platform\[' <<<"$state"; then
+      platform_in_state=1
+      secret_arn="$(aws_ro secretsmanager describe-secret --secret-id "$GRAFANA_SECRET_NAME" \
+        --region "$WORK_REGION" --query 'ARN' --output text 2>/dev/null || true)"
       if [ -z "$secret_arn" ] || [ "$secret_arn" = "None" ]; then
         # Only the format is validated, and a destroy reads nothing through it.
         secret_arn="arn:$(partition):secretsmanager:$WORK_REGION:$(account_id):secret:$GRAFANA_SECRET_NAME-absent"
@@ -119,6 +129,22 @@ for stack in $DESTROY_STACKS; do
       destroy_args+=(-var "grafana_admin_secret_arn=$secret_arn")
     else
       destroy_args+=(-var platform_enabled=false)
+    fi
+  fi
+
+  # The platform goes first, on its own, while the NAT gateway still exists.
+  # Karpenter runs in the private subnets and removes the termination finalizer on
+  # its EC2NodeClasses only after it has talked to EC2 and IAM. In one destroy graph
+  # nothing orders the NAT after the platform, so in window 1 the NAT went first, the
+  # controller lost the AWS APIs, the finalizer stayed, and the helm uninstall ran
+  # out its deadline (ADR 0060). A targeted destroy of module.platform keeps the
+  # network, the cluster and Karpenter's IAM in place until the platform is gone.
+  if [ "$platform_in_state" -eq 1 ]; then
+    info "--- $stack: module.platform first, while the cluster still has its NAT gateway"
+    if ! terraform -chdir="$dir" destroy "${destroy_args[@]}" -target=module.platform; then
+      error "terraform destroy of module.platform failed in $stack. Not destroying the network under it."
+      destroy_failed=1
+      continue
     fi
   fi
 
@@ -147,7 +173,15 @@ if aws_ro secretsmanager describe-secret --secret-id "$GRAFANA_SECRET_NAME" \
     error "could not delete $GRAFANA_SECRET_NAME; the audit will report it."
   fi
 fi
-rm -f "$WINDOW_KUBECONFIG"
+
+# The kubeconfig goes only once every destroy succeeded. Window 1 deleted it after a
+# failed destroy, which left a cluster still running and nothing local to inspect the
+# stuck finalizers with (ADR 0060).
+if [ "$destroy_failed" -eq 0 ]; then
+  rm -f "$WINDOW_KUBECONFIG"
+else
+  warn "keeping $WINDOW_KUBECONFIG: a destroy failed, and the cluster may still be there to inspect."
+fi
 
 # ------------------------------------------------------------------ 2. audit
 
