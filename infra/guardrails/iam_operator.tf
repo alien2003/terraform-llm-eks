@@ -264,6 +264,11 @@ data "aws_iam_policy_document" "operator_boundary" {
       # access level, no resource types and no condition keys.
       # https://docs.aws.amazon.com/service-authorization/latest/reference/list_billing.html
       "billing:GetCredits",
+      # Window 1's diagnosis stopped where this was missing: the denied CreateFleet
+      # was in CloudTrail and the operator could not read it (ADR 0018). Read
+      # access level, no resource types, no condition keys.
+      # https://docs.aws.amazon.com/service-authorization/latest/reference/list_cloudtrail.html
+      "cloudtrail:LookupEvents",
       "freetier:GetAccountActivity",
       "freetier:GetAccountPlanState",
       "freetier:GetFreeTierUsage",
@@ -802,6 +807,7 @@ data "aws_iam_policy_document" "operator_permissions" {
       "ce:Describe*",
       "ce:Get*",
       "ce:List*",
+      "cloudtrail:LookupEvents",
       "freetier:GetAccountActivity",
       "freetier:GetAccountPlanState",
       "freetier:GetFreeTierUsage",
