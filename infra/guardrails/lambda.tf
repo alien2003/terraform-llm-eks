@@ -67,19 +67,20 @@ data "aws_iam_policy_document" "kill" {
     resources = ["arn:${local.partition}:scheduler:*:${local.account_id}:schedule/${local.name_prefix}-windows/*"]
   }
 
-  # Termination is scoped by the same tag the sweeper selects on, so a bug in the
-  # handler cannot reach anything outside the project.
+  # Every instance in the project's regions, tagged or not. Until window 1 this was
+  # held to aws:ResourceTag/Project, on the premise that the boundary forced the
+  # tag onto every launch. It cannot on Karpenter's path: a fleet's instance/*
+  # reaches IAM with no request tags, so the boundary no longer names CreateFleet,
+  # and an untagged GPU node would then have been beyond the one role meant to
+  # stop it. This account exists for this project and nothing else, so "every
+  # instance in the region" is the project, and it is the rule that does not depend
+  # on any launcher tagging correctly (ADR 0018). The regions are the ones the
+  # boundary's RegionLock leaves open, the only places an instance can exist.
   statement {
-    sid       = "TerminateProjectInstances"
+    sid       = "TerminateInstancesInProjectRegions"
     effect    = "Allow"
     actions   = ["ec2:TerminateInstances"]
-    resources = ["arn:${local.partition}:ec2:*:${local.account_id}:instance/*"]
-
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/Project"
-      values   = [var.project_tag]
-    }
+    resources = [for region in local.allowed_regions : "arn:${local.partition}:ec2:${region}:${local.account_id}:instance/*"]
   }
 
   # Scaling the managed node group to zero is what stops the Auto Scaling group

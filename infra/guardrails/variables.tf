@@ -5,7 +5,7 @@ variable "region" {
 }
 
 variable "project_tag" {
-  description = "Value of the Project tag. The sweeper, the audit task and the boundary all select on it."
+  description = "Value of the Project tag. The audit, the boundary and the non-instance sweeps select on it."
   type        = string
   default     = "terraform-llm-eks"
 }
@@ -46,9 +46,10 @@ variable "system_instance_types" {
 
 variable "enforce_instance_project_tag" {
   description = <<-EOT
-    Require every instance launch to carry the Project tag, so that nothing the operator
-    starts is invisible to the sweeper and to the audit task. Turning this off leaves the
-    safety net blind to untagged instances.
+    Require every RunInstances launch to carry the Project tag, which the cost reports
+    and the audit's per-stack view read. The sweeper and the kill role select every
+    instance in the region regardless of tags, so turning this off loses attribution,
+    not the stop (ADR 0018).
   EOT
   type        = bool
   default     = true

@@ -48,13 +48,13 @@ Terminating instances is not the same thing as stopping spend, which is what the
 Lambda got wrong. A managed node group replaces what it loses within minutes, Karpenter re-provisions a GPU
 node for a pod that is still pending, and the control plane and the NAT gateway bill by the hour whether or
 not an instance exists. So the order is: scale the node groups to zero, delete them, terminate every
-project-tagged instance, delete the load balancers and NAT gateways in the project VPCs, release the
+instance in the region, delete the load balancers and NAT gateways in the project VPCs, release the
 Elastic IPs, delete the cluster. `mise run down` disarms the schedule only after `mise run audit` reports no
 orphans.
 
 Deleting a node group takes minutes and a cluster cannot go while one exists, so a fired timer usually
 leaves the cluster for a second pass. The always-on sweeper is that second pass. It runs whether or not a
-window is open, terminates any project-tagged instance older than its configured age, and escalates to the
+window is open, terminates any instance older than its configured age, and escalates to the
 full stop when it finds an hourly resource sitting there with no instances and no window timer pending. It
 is the layer that survives me closing the laptop, losing the network, or the session ending badly. Neither
 timer asks anyone for confirmation.

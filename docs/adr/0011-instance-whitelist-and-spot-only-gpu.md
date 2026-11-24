@@ -1,8 +1,9 @@
 # 0011. The instance whitelist and the Spot-only GPU rule live in the permission boundary
 
 Status: accepted. The two Standard quota ceilings it describes at 5 vCPUs are 16 and 32 since ADR 0017.
+The `CreateFleet` half of the whitelist and of the tag requirement is superseded by ADR 0018.
 Date: 2026-09-08
-Revised: 2026-09-09
+Revised: 2026-11-23
 
 ## Context
 
@@ -97,7 +98,9 @@ instance, launch-template, placement-group, subnet and volume. Its `instance` ro
 `ec2:Tenancy`. `ec2:InstanceMarketType` is not in it, and it is not on any other `CreateFleet` resource
 type either. The `RunInstances` `instance` row does list it.
 
-So the type whitelist covers `CreateFleet` and the market rule cannot. Adding `ec2:CreateFleet` to
+So the type whitelist covers `CreateFleet` and the market rule cannot. (Corrected 2026-11-23: it does
+not. EC2 sends no `ec2:InstanceType` for a fleet's instances, and the whitelist on `CreateFleet` denied
+every tagged fleet and filtered none. ADR 0018.) Adding `ec2:CreateFleet` to
 `GpuSpotOnly` would produce a statement that renders, validates, simulates and enforces nothing, which is
 strictly worse than the honest gap, because a drill would print a pass for it. The header comment in
 `infra/guardrails/iam_operator.tf` that claimed the two actions evaluate the same keys was wrong and has

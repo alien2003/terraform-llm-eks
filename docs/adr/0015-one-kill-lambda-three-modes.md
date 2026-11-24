@@ -1,6 +1,6 @@
 # 0015. One kill Lambda, three modes, and a stop that means stop
 
-Status: accepted
+Status: accepted. Instances are selected by state, not by the Project tag, since ADR 0018.
 Date: 2026-09-09
 
 ## Context

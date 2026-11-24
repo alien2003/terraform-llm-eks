@@ -82,7 +82,7 @@ Comment the admin profile block back out afterwards and confirm that
 | Failure | What stops it | Where |
 | --- | --- | --- |
 | A GPU node launched on-demand instead of Spot | Boundary denies `RunInstances` when the type is a GPU type and `ec2:InstanceMarketType` is not `spot` | `iam_operator.tf`, `GpuSpotOnly` |
-| An instance type nobody costed | Boundary denies `RunInstances` and `CreateFleet` for any type outside the whitelist | `InstanceTypeWhitelist` |
+| An instance type nobody costed | Boundary denies `RunInstances` for any type outside the whitelist; on Karpenter's `CreateFleet` the NodePools and the vCPU quotas hold it (ADR 0018) | `InstanceTypeWhitelist`, `quotas.tf` |
 | A launch through an API the whitelist cannot filter | Boundary denies `RequestSpotInstances` and `RequestSpotFleet` outright | `NoUnfilterableLaunchPath` |
 | An instance the sweeper cannot see | Boundary denies a launch that does not carry the `Project` tag | `InstancesMustCarryProjectTag` |
 | A small instance resized into a large one | Boundary denies `ModifyInstanceAttribute` and `ModifyInstancePlacement` outright | `NoResizeOrRelocate` |
@@ -96,7 +96,7 @@ Comment the admin profile block back out afterwards and confirm that
 | The safety net being switched off | Boundary denies writes against the kill Lambda, the sweeper, the window group, both SNS topics, the kill dead-letter queue and every `llm-eks-` alarm | `NoSafetyNetTampering`, `NoKillPathTampering` |
 | A teardown triggered by anyone who can reach the account | Boundary denies the operator `sns:Publish` on the alert topic, and the topic policy no longer grants `SNS:Publish` to account principals at all. Publishing there invokes the kill Lambda, so a publish is a teardown | `NoSafetyNetTampering`, `sns.tf` |
 | The failure-detection layer being deleted while everything still reports green | The notices topic, the dead-letter queue and the four kill-path alarms are named in the same deny as the spend alarms | `NoSafetyNetTampering` |
-| A session that ends badly and leaves a node running | Sweeper schedule scales the node groups to zero and terminates every project-tagged instance once one of them has outlived the longest window the protocol allows, whether or not a window is open | `schedules.tf`, `lambda/handler.py` |
+| A session that ends badly and leaves a node running | Sweeper schedule scales the node groups to zero and terminates every instance in the region once one of them has outlived the longest window the protocol allows, whether or not a window is open | `schedules.tf`, `lambda/handler.py` |
 | A window that runs past its approved hours | One-shot timer in the `llm-eks-windows` group, armed by `mise run up` at now plus `WINDOW_HOURS`, which runs a full stop | created at window time |
 | An Auto Scaling group or Karpenter replacing what was just terminated | Every node group is scaled to zero before anything is terminated, which also removes the only nodes the Karpenter controller can run on | `lambda/handler.py` |
 | The control plane, NAT gateway, load balancer and public IPv4 hours, which bill with no instance running | A full stop deletes the node groups, the load balancers in the project VPCs, the NAT gateways and the cluster, and releases the Elastic IPs | `lambda/handler.py` |
@@ -234,15 +234,17 @@ EC2 has three ways to start an instance and the whitelist does not reach all of 
 `ec2:InstanceMarketType` are available on its `instance` resource type, so this is the one path where
 the whitelist and the Spot-only rule for GPU types both apply.
 
-`ec2:CreateFleet` is Karpenter's path. It supports `ec2:InstanceType` on the instance resource type but
-not `ec2:InstanceMarketType`, so the instance-type whitelist covers it and the Spot-only rule does not. I
-have not found a documented condition key that expresses "Spot only" for `CreateFleet`, and I am not
-going to invent one. What covers the gap instead: the Karpenter NodePool pins the GPU capacity type to
-Spot in the cluster stack, the on-demand G quota stays at its default of zero so an on-demand GPU launch
-has no headroom to succeed in, the sweeper terminates anything that outlives its age, and the one-shot
-window timer terminates everything at the end of the window. Four partial controls rather than one
-complete one, written down here rather than papered over, and the first thing to re-check if AWS adds the
-key.
+`ec2:CreateFleet` is Karpenter's path, and the boundary does not filter it. The reference lists
+`ec2:InstanceType` on its instance resource type, but EC2 does not send it: a fleet that tags its
+instances is authorized on `instance/*` with no type and no request tags in the context, and a fleet
+that does not tag them is not evaluated on `instance/*` at all. Window 1 found this the hard way, when
+the whitelist denied every Karpenter launch and filtered none, so neither launch Deny names
+`CreateFleet` any more (ADR 0018). There is no market key on that row either. What holds the fleet path
+instead: the Karpenter NodePool pins the GPU capacity type to
+Spot and lists the instance types in the cluster stack, the vCPU quotas cap every family (on-demand G at
+zero, so an on-demand GPU launch has no headroom to succeed in), the sweeper terminates anything that
+outlives its age, and the one-shot window timer terminates everything at the end of the window. Partial
+controls rather than one complete one, written down here rather than papered over.
 
 `ec2:RequestSpotInstances` is the legacy Spot API and it cannot be filtered at all. Its authorization row
 has no `instance` resource type and `ec2:InstanceType` does not appear in it anywhere, so no condition
@@ -404,8 +406,9 @@ were never in the kill path at all.
    Lambda with no cluster credentials and no route to a private endpoint has no way to make one.
 2. **In a full stop, delete those node groups.** Not because the instances need deleting twice, but
    because `DeleteCluster` refuses while a managed node group exists.
-3. **Terminate every project-tagged instance,** one call per instance so that a single un-terminatable
-   instance cannot fail the whole batch. By this point nothing is watching for them to disappear.
+3. **Terminate every instance in the region,** tagged or not (ADR 0018), one call per instance so
+   that a single un-terminatable instance cannot fail the whole batch. By this point nothing is
+   watching for them to disappear.
 4. **In a full stop, delete the charges that do not care whether an instance exists:** the load balancers
    in the project VPCs, the NAT gateways, the cluster, and then the unassociated Elastic IPs.
 
@@ -425,8 +428,8 @@ leaves a half-deleted network nobody can reason about.
 ### Which mode does how much
 
 `sweep` is what the always-on schedule sends every `sweeper_interval_minutes`. It does steps 1 and 3 when
-it finds a project-tagged instance that has outlived `sweeper_max_age_minutes`, and it terminates
-everything project-tagged rather than only the aged ones: that age is longer than the longest window the
+it finds an instance that has outlived `sweeper_max_age_minutes`, and it terminates every instance in the
+region rather than only the aged ones: that age is longer than the longest window the
 approval form can grant, so an instance older than it means no window is legitimately open, and leaving
 the young ones would keep a GPU node that Karpenter replaced late in the window running for hours after
 everything around it had stopped.
@@ -434,7 +437,7 @@ everything around it had stopped.
 `sweep` also escalates to a full stop, and that is what makes the whole thing converge. Deleting a node
 group takes minutes, and the cluster cannot be deleted until it has finished, so the pass that fires the
 timer normally leaves the cluster behind with a `ResourceInUseException`. The sweeper picks it up on the
-next run, because by then the cluster is an hourly resource with no project-tagged instances running, no
+next run, because by then the cluster is an hourly resource with no instances running, no
 window timer pending, and more than `orphan_grace_minutes` on its own clock. All three conditions have to
 hold. A cluster is legitimately node-less for the first ten minutes or so of an apply, and a window in
 which a node group launch is being debugged can be node-less for a lot longer than that, which is why the
@@ -481,9 +484,11 @@ that the sweeper was configured, not that it had ever worked.
 
 ### The role
 
-Every mutating action is scoped to the project's own resource. `TerminateInstances` carries the same tag
-condition as before. The node group calls are scoped to `nodegroup/llm-eks/*/*` and `DeleteCluster` to
-`cluster/llm-eks`, which is the ARN shape AWS documents for those actions.
+Every mutating action is scoped to the project's own resources. `TerminateInstances` is scoped to the
+instances in the project's regions, with no tag condition: the boundary cannot force the Project tag onto
+Karpenter's instances, and this account holds nothing else (ADR 0018). The node group calls are
+scoped to `nodegroup/llm-eks/*/*` and `DeleteCluster` to `cluster/llm-eks`, which is the ARN shape AWS
+documents for those actions.
 
 Two of them are not scoped, and the reason is worth being honest about rather than hiding. I could not
 find a primary statement that `ec2:DeleteNatGateway` and `ec2:ReleaseAddress` support resource-level

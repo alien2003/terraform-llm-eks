@@ -57,7 +57,8 @@ JSON_PATH="$OUT_DIR/drill-$STAMP.json"
 ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/llm-eks-drill.XXXXXX")"
 RESULTS_FILE="$(mktemp "${TMPDIR:-/tmp}/llm-eks-drill-results.XXXXXX")"
 INVOKE_FILE="$(mktemp "${TMPDIR:-/tmp}/llm-eks-drill-invoke.XXXXXX")"
-trap 'rm -f "$ERR_FILE" "$RESULTS_FILE" "$INVOKE_FILE"' EXIT
+FLEET_FILE="$(mktemp "${TMPDIR:-/tmp}/llm-eks-drill-fleet.XXXXXX")"
+trap 'rm -f "$ERR_FILE" "$RESULTS_FILE" "$INVOKE_FILE" "$FLEET_FILE"' EXIT
 
 heading "guard-drill — $STAMP — region $WORK_REGION"
 
@@ -494,23 +495,13 @@ sim explicitDeny eks:CreateCluster "*" \
 sim allowed eks:CreateCluster "*" \
     "ContextKeyName=eks:computeConfigEnabled,ContextKeyValues=false,ContextKeyType=boolean"
 
-# --- CreateFleet, which is how Karpenter launches and therefore the path that matters
-#     most. The type whitelist and the Project tag requirement both name it; the
-#     Spot-only rule deliberately does not, because the CreateFleet row of the EC2
-#     authorization reference lists no ec2:InstanceMarketType and an unsupported
-#     condition key is ignored rather than enforced. See the comment above GpuSpotOnly
-#     in infra/guardrails/iam_operator.tf and ADR 0011. So these cases drill what is
-#     enforced on that path and make no claim about the market, which is held by the
-#     "Running On-Demand G and VT instances" quota at zero instead.
-sim explicitDeny ec2:CreateFleet "arn:${PARTITION}:ec2:${WORK_REGION}:${ACCOUNT}:instance/*" \
-    "ContextKeyName=ec2:InstanceType,ContextKeyValues=p5.48xlarge,ContextKeyType=string" \
-    "ContextKeyName=aws:RequestTag/Project,ContextKeyValues=$PROJECT_TAG,ContextKeyType=string"
-sim explicitDeny ec2:CreateFleet "arn:${PARTITION}:ec2:${WORK_REGION}:${ACCOUNT}:instance/*" \
-    "ContextKeyName=ec2:InstanceType,ContextKeyValues=g6.xlarge,ContextKeyType=string" \
-    "ContextKeyName=aws:RequestTag/Project,ContextKeyValues=not-this-project,ContextKeyType=string"
-sim allowed ec2:CreateFleet "arn:${PARTITION}:ec2:${WORK_REGION}:${ACCOUNT}:instance/*" \
-    "ContextKeyName=ec2:InstanceType,ContextKeyValues=g6.xlarge,ContextKeyType=string" \
-    "ContextKeyName=aws:RequestTag/Project,ContextKeyValues=$PROJECT_TAG,ContextKeyType=string"
+# --- CreateFleet has no simulator cases any more. Until window 1 there were three, and
+#     they passed: told that ec2:InstanceType was p5.48xlarge, the simulator denied the
+#     fleet, exactly as the policy says. EC2 never tells IAM that. A real fleet's
+#     instance/* reaches the boundary with no ec2:InstanceType and no request tags, so
+#     the cases tested a request that does not exist, and every Karpenter launch was
+#     refused while the drill was green (ADR 0018). The fleet path is drilled below,
+#     with create-fleet --dry-run, which is the only test whose context EC2 builds.
 
 # --- the autoscaling narrowing. An Auto Scaling group does not launch instances as
 #     the principal that created or resized it: it launches through the service-linked
@@ -639,10 +630,95 @@ else
   # x2gd with InvalidParameterValue before IAM is evaluated, so the case gave no
   # verdict (window 0, 2026-11-09).
   launch denied  "not whitelisted, x2iedn.32xlarge" x2iedn.32xlarge spot yes
-  # An untagged instance is invisible to the sweeper and to the audit task, which is
-  # a worse failure than a launch that does not happen.
+  # RunInstances still requires the tag. The fleet path cannot (ADR 0018).
   launch denied  "whitelisted but untagged"      t3.medium   on-demand no
 fi
+
+# ------------------------------------------------------------------ fleet matrix
+
+heading "2b. create-fleet --dry-run matrix"
+
+note "Karpenter's launch path. The request names a launch template that does not exist,"
+note "so nothing could launch even without --dry-run, and the drill needs no write."
+
+# fleet <expected> <label> <instance-type> <tagged: yes|no>
+#
+# EC2 checks the boundary on the fleet's instance/* before it looks the launch template
+# up: a fleet naming a missing template comes back UnauthorizedOperation, not a
+# template error, when the boundary refuses it (materials/guardrails/w1b-createfleet-deny/).
+# So three answers carry a verdict. DryRunOperation and a missing-template error both
+# mean IAM let the request through; UnauthorizedOperation means it did not, and the
+# decoded message names the statement. Anything else is inconclusive and fails.
+#
+# What these cases prove is that Karpenter's launch is not refused, tagged or not.
+# They do not prove a type filter, because there is none on this path: EC2 sends the
+# boundary no ec2:InstanceType for a fleet, and an untagged fleet's instance/* is not
+# evaluated at all. "not whitelisted" is expected ALLOWED for that reason, and the
+# types Karpenter may launch are held by the NodePools and the quotas (ADR 0018).
+fleet() {
+  local expected="$1" label="$2" instance_type="$3" tagged="$4"
+
+  jq -n --arg type "$instance_type" --arg tag "$PROJECT_TAG" --arg tagged "$tagged" \
+        --arg lt "${NAME_PREFIX}-drill-does-not-exist" '
+    {
+      Type: "instant",
+      LaunchTemplateConfigs: [{
+        LaunchTemplateSpecification: {LaunchTemplateName: $lt, Version: "$Latest"},
+        Overrides: [{InstanceType: $type}]
+      }],
+      TargetCapacitySpecification: {TotalTargetCapacity: 1, DefaultTargetCapacityType: "spot"}
+    }
+    + if $tagged == "yes" then
+        {TagSpecifications: [
+          {ResourceType: "instance", Tags: [{Key: "Project", Value: $tag}]},
+          {ResourceType: "volume",   Tags: [{Key: "Project", Value: $tag}]},
+          {ResourceType: "fleet",    Tags: [{Key: "Project", Value: $tag}]}
+        ]}
+      else {} end' >"$FLEET_FILE"
+
+  local msg="" actual verdict encoded statements
+  if aws_dry_run ec2 create-fleet --dry-run --region "$WORK_REGION" \
+       --cli-input-json "file://$FLEET_FILE" >/dev/null 2>"$ERR_FILE"; then
+    actual="no-error"
+  else
+    msg="$(tr '\n' ' ' <"$ERR_FILE")"
+    case "$msg" in
+      *DryRunOperation*)                      actual="allowed" ;;
+      *UnauthorizedOperation*)                actual="denied" ;;
+      *InvalidLaunchTemplateName*|*InvalidLaunchTemplateId*) actual="allowed" ;;
+      *)                                      actual="inconclusive" ;;
+    esac
+  fi
+
+  if [ "$actual" = "denied" ]; then
+    encoded="$(printf '%s' "$msg" | grep -oE 'Encoded authorization failure message: [A-Za-z0-9_-]+' |
+      sed 's/.*: //' || true)"
+    if [ -n "$encoded" ] && statements="$(aws_ro sts decode-authorization-message \
+         --encoded-message "$encoded" --query DecodedMessage --output text 2>/dev/null |
+         jq -r '[.matchedStatements.items[]?.statementId] | join(",")')"; then
+      msg="matched: ${statements:-<none>}; $msg"
+    fi
+  fi
+
+  if [ "$actual" = "$expected" ]; then
+    verdict=PASS
+    check PASS "fleet: $label" "$actual as expected"
+  elif [ "$actual" = "inconclusive" ] || [ "$actual" = "no-error" ]; then
+    verdict=FAIL
+    check FAIL "fleet: $label" "no verdict — EC2 said: $(printf '%.100s' "${msg:-<nothing>}")"
+  else
+    verdict=FAIL
+    check FAIL "fleet: $label" "expected $expected, got $actual — $(printf '%.120s' "$msg")"
+  fi
+
+  record fleet "$label ($instance_type, spot, tagged=$tagged)" "$expected" "$actual" "$verdict" "${msg:-}"
+}
+
+fleet allowed "GPU on Spot, g6.xlarge"          g6.xlarge  yes
+fleet allowed "GPU on Spot, g6.2xlarge"         g6.2xlarge yes
+# Karpenter's own fallback type, the one window 1's dry-run validation asked for.
+fleet allowed "not whitelisted, m5.large"       m5.large   yes
+fleet allowed "whitelisted but untagged"        t3.medium  no
 
 # ------------------------------------------------------------------ the kill path
 

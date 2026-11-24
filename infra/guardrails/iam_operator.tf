@@ -38,7 +38,12 @@
 #     say which action evaluates which of them
 #     https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html
 #   RunInstances and CreateFleet do NOT evaluate the same keys. Both rows list
-#     ec2:InstanceType on the instance resource type, so the whitelist covers both.
+#     ec2:InstanceType on the instance resource type, but listing is not sending.
+#     Measured with create-fleet --dry-run on 2026-11-23: a fleet that tags its
+#     instances has instance/* authorized with no ec2:InstanceType and no
+#     aws:RequestTag/Project in the context, and a fleet that does not tag them has
+#     instance/* not evaluated at all. So the launch Denies below bind RunInstances
+#     only (ADR 0018).
 #     Only the RunInstances row lists ec2:InstanceMarketType; the CreateFleet
 #     instance row is aws:RequestTag/${TagKey}, aws:TagKeys, ec2:AvailabilityZone,
 #     ec2:AvailabilityZoneId, ec2:CpuOptionsAmdSevSnp, ec2:EbsOptimized,
@@ -394,15 +399,23 @@ data "aws_iam_policy_document" "operator_boundary" {
   # than an Allow of the list, so that a request with no instance type in it, or one
   # this policy has never heard of, is refused rather than permitted. StringNotEquals
   # is true when the key is absent, which is the direction that fails closed.
-  # Both rows evaluate ec2:InstanceType on the instance resource type, so this one
-  # statement covers the managed node group's launch path and Karpenter's.
+  #
+  # RunInstances only. The reference lists ec2:InstanceType for CreateFleet too, and
+  # this statement named it until window 1, where every Karpenter launch was refused
+  # here. On a fleet, EC2 authorizes instance/* only when the request tags the
+  # instances, and then with no ec2:InstanceType in the context, so the absent key
+  # denied every tagged fleet whatever its type; an untagged fleet of m5.large passed
+  # the same boundary on a dry run, because its instance/* is never evaluated. The
+  # statement filtered no type on this path, it only broke Karpenter.
+  # StringNotEqualsIfExists would not have helped: AWS documents that a negated
+  # ...IfExists in a Deny still matches a missing key. On the fleet path the types
+  # are held where they are on the managed node group's path, which never reached
+  # this boundary either: the NodePool requirements and the per-family vCPU quotas.
+  # ADR 0018.
   statement {
-    sid    = "InstanceTypeWhitelist"
-    effect = "Deny"
-    actions = [
-      "ec2:RunInstances",
-      "ec2:CreateFleet",
-    ]
+    sid       = "InstanceTypeWhitelist"
+    effect    = "Deny"
+    actions   = ["ec2:RunInstances"]
     resources = ["arn:${local.partition}:ec2:*:*:instance/*"]
 
     condition {
@@ -444,18 +457,19 @@ data "aws_iam_policy_document" "operator_boundary" {
     }
   }
 
-  # An instance without the Project tag is invisible to the sweeper and to the audit
-  # task, which both select on it. That is a worse failure than a launch that fails.
+  # The Project tag at launch keeps the cost reports and the cluster-scoped audit
+  # honest. RunInstances only, for the same reason as the whitelist: a fleet's
+  # instance/* carries no aws:RequestTag, so naming CreateFleet here denied every
+  # Karpenter launch. Nothing that stops money depends on the tag any more: the
+  # sweeper and the kill role select every instance in the region, and the audit
+  # fails on an untagged one (ADR 0018).
   dynamic "statement" {
     for_each = var.enforce_instance_project_tag ? [1] : []
 
     content {
-      sid    = "InstancesMustCarryProjectTag"
-      effect = "Deny"
-      actions = [
-        "ec2:RunInstances",
-        "ec2:CreateFleet",
-      ]
+      sid       = "InstancesMustCarryProjectTag"
+      effect    = "Deny"
+      actions   = ["ec2:RunInstances"]
       resources = ["arn:${local.partition}:ec2:*:*:instance/*"]
 
       condition {
@@ -467,10 +481,11 @@ data "aws_iam_policy_document" "operator_boundary" {
   }
 
   # Forcing the tag on at launch is cosmetic unless it also cannot come off
-  # afterwards: the sweeper's describe filter, the kill role's aws:ResourceTag
-  # condition and every resource query in the audit select on Project, so one
-  # delete-tags call makes a running instance unkillable by anything but the
-  # administrator. Stack is included because the audit reports on it.
+  # afterwards: the NAT gateway and address sweeps and every resource query in the
+  # audit select on Project, so one delete-tags call hides a resource from them.
+  # Instances no longer depend on it (the sweeper and the kill role take every
+  # instance in the region, ADR 0018), and the Deny stays for the rest. Stack is
+  # included because the audit reports on it.
   # Nothing in this project removes either tag: the tags come from the provider's
   # default_tags block, so Terraform sets them on create and leaves them alone,
   # and no policy the operator creates carries ec2:DeleteTags at all.
