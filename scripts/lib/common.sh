@@ -169,7 +169,7 @@ mise_usage_arg() {
 aws_ro() {
   local service="${1:-}" operation="${2:-}"
   case "$operation" in
-    describe-*|list-*|get-*|lookup-*|head-*|search-*|select-*|simulate-*|batch-get-*|check-*) : ;;
+    describe-*|list-*|get-*|lookup-*|head-*|search-*|select-*|simulate-*|batch-get-*|check-*|decode-*) : ;;
     *) die "aws_ro refuses '$service $operation': not a read-only operation. Use aws_write inside a window, or fix the call." ;;
   esac
   command aws "$@"

@@ -15,15 +15,15 @@ infra/guardrails/README.md under "The kill Lambda". The short version:
      only place it can run;
   2. in a full stop, delete those node groups, because the cluster cannot be
      deleted while they exist;
-  3. terminate every project-tagged instance, which is now nothing's job to
-     replace;
+  3. terminate every instance in the region, tagged or not, which is now
+     nothing's job to replace;
   4. in a full stop, delete the load balancers in the project VPCs, the NAT
      gateways, the cluster itself, and release the Elastic IPs.
 
 Three things call it and they want different amounts of that:
 
-  sweep     the always-on schedule. Does 1 and 3 when it finds a project-tagged
-            instance older than max_age_minutes, which is longer than the
+  sweep     the always-on schedule. Does 1 and 3 when it finds an instance
+            older than max_age_minutes, which is longer than the
             longest window the approval form can grant, so an aged instance
             means no window is legitimately open and everything goes. Escalates
             to a full stop when it finds an hourly resource left behind with no
@@ -223,14 +223,20 @@ class Steps:
             return None
 
 
-def _find_instances(ec2, project_tag):
-    """Every project-tagged instance in a billable state, with its age inputs."""
+def _find_instances(ec2):
+    """Every instance in a billable state in this region, with its age inputs.
+
+    Not filtered on the Project tag. Karpenter launches through CreateFleet, and a
+    fleet's instances reach IAM with no request tags, so the boundary cannot require
+    the tag on that path (ADR 0018). This account exists for this project, so every
+    instance in one of its regions is the project's, and selecting all of them is the
+    rule that holds whether or not a launcher tagged what it started.
+    """
     found = []
     for page in _pages(
         ec2,
         "describe_instances",
         Filters=[
-            {"Name": "tag:Project", "Values": [project_tag]},
             {"Name": "instance-state-name", "Values": BILLABLE_STATES},
         ],
     ):
@@ -578,7 +584,7 @@ def _fire_time(expression):
 def _orphans(cluster, gateways, now, grace_minutes):
     """Hourly resources that have been running with no instances long enough.
 
-    Reached only when no project-tagged instance is running and no window timer
+    Reached only when no instance is running and no window timer
     is pending, so the question left is whether this is a window that has not
     launched a node yet.
     """
@@ -612,7 +618,7 @@ def _stop_region(region, mode, config, now, window_pending, steps):
 
     dry_run = config["dry_run"] or mode == "report"
 
-    instances = _find_instances(ec2, config["project_tag"])
+    instances = _find_instances(ec2)
     cluster = _find_cluster(eks, steps, config["cluster_name"], config["project_tag"])
     gateways = _find_nat_gateways(ec2, steps, config["project_tag"])
 
@@ -623,8 +629,8 @@ def _stop_region(region, mode, config, now, window_pending, steps):
 
     full_stop = mode in ("kill_all", "report") or bool(orphans)
     # An instance older than the longest window the approval form can grant
-    # means no window is legitimately open, so every project-tagged instance in
-    # the region goes, not only the aged ones. Leaving the young ones would keep
+    # means no window is legitimately open, so every instance in the region
+    # goes, not only the aged ones. Leaving the young ones would keep
     # a GPU node that Karpenter replaced late in the window running for hours
     # after everything around it was stopped.
     stopping = full_stop or bool(aged)
@@ -661,7 +667,7 @@ def _stop_region(region, mode, config, now, window_pending, steps):
             eks, steps, cluster["name"], node_groups, dry_run
         )
 
-    # 3. Everything project-tagged that is running.
+    # 3. Every instance in the region that is running, tagged or not.
     result["selected"] = [item["instance_id"] for item in instances]
     result["terminated"] = _terminate(ec2, steps, result["selected"], dry_run)
 

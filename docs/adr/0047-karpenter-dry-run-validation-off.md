@@ -1,11 +1,14 @@
 # 0047. Karpenter's dry-run validation is off
 
 Date: 2026-11-20
+Revised: 2026-11-23
 
 ## Status
 
-Accepted. The permission boundary is unchanged. ADR 0040 is why the NodeClasses and NodePools share one
-Helm release, which is where the race below comes from.
+Superseded by ADR 0048. The diagnosis below is wrong: the dry run failed because EC2 sends no
+`ec2:InstanceType` on a tagged fleet's `instance/*`, so the boundary denied every fleet, not only
+`m5.large` (ADR 0018). Kept as written so the mistake can be read. ADR 0040 is why the NodeClasses
+and NodePools share one Helm release, which is where the race below was supposed to come from.
 
 ## Context
 

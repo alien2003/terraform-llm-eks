@@ -171,8 +171,7 @@ The simulator half also covers the statements that are not on the `run-instances
 launch matrix cannot reach them: the three volume bounds (wrong type, too large, provisioned IOPS,
 each against a violating request and against the GPU node's own 120 GiB gp3 root volume, which has
 to stay possible or the cluster cannot start a GPU node at all), the tag statements (`Project`
-cannot be deleted or repointed, `Window` can be written freely), EKS Auto Mode, and `ec2:CreateFleet`,
-which is how Karpenter actually launches.
+cannot be deleted or repointed, `Window` can be written freely) and EKS Auto Mode.
 
 Two of the simulator's groups are there because the control they test is the *absence* of a grant,
 which is the weakest kind there is. The autoscaling cases are one: an Auto Scaling group launches
@@ -206,14 +205,15 @@ expectations and either can fail. Because the rest of the drill measures the ope
 not re-run wholesale with administrator credentials; when the invoke is refused the script prints
 the single command that exercises report mode instead.
 
-The CreateFleet cases drill the type whitelist and the tag requirement and make no claim about the
-instance market, because the CreateFleet row of the EC2 authorization reference lists no
-`ec2:InstanceMarketType` and a condition key an action does not support is ignored rather than
-enforced. `infra/guardrails/iam_operator.tf` says the same thing above `GpuSpotOnly` and ADR 0011
-has the reasoning. What keeps the GPU pool on Spot on that path is the "Running On-Demand G and VT
-instances" quota, held at a target of zero and re-checked by `guard-status` at window open. A drill
-case asserting an IAM deny there would pass a simulation and prove nothing, which is worse than not
-having one.
+`ec2:CreateFleet`, which is how Karpenter launches, is drilled with `create-fleet --dry-run` and not
+with the simulator. Until window 1 it had three simulated cases, and they passed against a boundary
+that refused every real Karpenter launch: the simulator was told `ec2:InstanceType`, and EC2 never
+sends it for a fleet's instances (ADR 0018). The fleet matrix names a launch template that does not
+exist, so it needs no write, and expects every case allowed, including a type outside the whitelist,
+because the boundary no longer filters that path. A refused case is decoded with
+`sts decode-authorization-message` and the report names the statement. What keeps the GPU pool on Spot
+and on its two types there is the NodePool and the quotas, "Running On-Demand G and VT instances" at
+zero among them, re-checked by `guard-status` at window open.
 
 ### window-up.sh
 
@@ -307,9 +307,9 @@ created by a Kubernetes Service carries `kubernetes.io/*` tags and nothing of ou
 a PVC carries the CSI driver's. An Elastic IP allocated outside Terraform carries none. So four of
 the priced classes get a second sweep that does not use the tag:
 
-- Instances with no `Project` tag, in any state. Invisible to the sweeper, which is the failure the
-  boundary's tag condition exists to prevent; counting them is the only way to notice the condition
-  has stopped working.
+- Instances with no `Project` tag, in any state. The boundary requires the tag on `RunInstances` but
+  cannot on Karpenter's `CreateFleet` (ADR 0018). The sweeper terminates such an instance anyway,
+  since it selects by state; the audit still fails on it, because nothing here should launch one.
 - Load balancers, both APIs. `elbv2` is not the whole story: an unannotated `type: LoadBalancer`
   Service with no controller installed gets a *classic* load balancer, which lives in a different
   API and is invisible to `elbv2` before any tag is considered. Both are listed, and one is an

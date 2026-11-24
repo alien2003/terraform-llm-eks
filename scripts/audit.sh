@@ -158,9 +158,12 @@ for region in $REGIONS; do
     done <<<"$instances"
   fi
 
-  # An instance without the Project tag is invisible to the sweeper and to this
-  # audit, which is the failure mode the boundary's tag condition exists to prevent.
-  # Counting them is the only way to notice that the condition has stopped working.
+  # An instance without the Project tag. The boundary requires the tag on
+  # RunInstances but cannot on CreateFleet, Karpenter's path, where the request
+  # reaches IAM with no tags in it (ADR 0018). The sweeper and the kill role take
+  # every instance in the region regardless, so this is no longer an instance the
+  # safety net cannot see; it is still one this audit fails on, because nothing in
+  # the project should launch one and an orphan is an orphan.
   untagged="$(aws_ro ec2 describe-instances --region "$region" \
     --filters "Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped" \
     --output json |
@@ -168,12 +171,12 @@ for region in $REGIONS; do
       select(((.Tags // []) | map(select(.Key == "Project" and .Value == $p)) | length) == 0) |
       [.InstanceId, .InstanceType, .State.Name] | @tsv')"
   if [ -z "$untagged" ]; then
-    check PASS "untagged instances" "none — the sweeper can see everything that is running"
+    check PASS "untagged instances" "none"
   else
     while IFS=$'\t' read -r id itype state; do
       [ -n "$id" ] || continue
-      check FAIL "untagged instance" "$id $itype $state — no Project tag, so the sweeper will never touch it"
-      orphan "$region" untagged-instance "$id" "$itype $state, invisible to the sweeper"
+      check FAIL "untagged instance" "$id $itype $state — no Project tag; the sweeper still terminates it once aged"
+      orphan "$region" untagged-instance "$id" "$itype $state, no Project tag"
     done <<<"$untagged"
   fi
 

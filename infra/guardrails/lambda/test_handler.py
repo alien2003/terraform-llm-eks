@@ -550,18 +550,26 @@ class HandlerTest(unittest.TestCase):
 
     # ------------------------------------------------------------ housekeeping
 
-    def test_the_project_tag_and_states_come_from_the_environment(self):
+    def test_the_project_tag_comes_from_the_environment(self):
         clients = region_clients()
         with mock.patch.dict("os.environ", {"PROJECT_TAG": "something-else"}):
             result = self.run_handler({}, clients)
+        self.assertEqual(result["project_tag"], "something-else")
+        self.assertEqual(
+            paginate_kwargs(clients["ec2"], "describe_nat_gateways")["Filters"],
+            [{"Name": "tag:Project", "Values": ["something-else"]}],
+        )
+
+    def test_instances_are_selected_by_state_alone_never_by_tag(self):
+        # A Karpenter node launched through CreateFleet may carry no Project tag,
+        # because the boundary cannot require it on that path (ADR 0018). The
+        # describe must not filter it out.
+        clients = region_clients()
+        self.run_handler({}, clients)
         self.assertEqual(
             paginate_kwargs(clients["ec2"], "describe_instances")["Filters"],
-            [
-                {"Name": "tag:Project", "Values": ["something-else"]},
-                {"Name": "instance-state-name", "Values": handler.BILLABLE_STATES},
-            ],
+            [{"Name": "instance-state-name", "Values": handler.BILLABLE_STATES}],
         )
-        self.assertEqual(result["project_tag"], "something-else")
 
     def test_the_event_can_shorten_the_age(self):
         clients = region_clients(
