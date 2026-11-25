@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mise run up WINDOW_ID=<n> WINDOW_HOURS=<h>
+# mise run up WINDOW_ID=<n> WINDOW_HOURS=<h> [APPROVED_AT=<yyyy-mm-ddThh:mm:ssZ>]
 #
 # Opens a cloud window. Rule 2b of the workspace rules fixes the order, and this
 # script is that order made mechanical:
@@ -22,6 +22,9 @@
 #      safety property: if the apply hangs, if the session dies, if the human walks
 #      away, the timer still fires and the kill Lambda still terminates everything.
 #      Arming after the apply would leave a hole exactly the width of the apply.
+#      With APPROVED_AT, the timer fires at APPROVED_AT + WINDOW_HOURS, which is when
+#      the approval ends. Without it, at arming + WINDOW_HOURS, which on window 1's
+#      second attempt was 42 minutes past the approval (ADR 0061).
 #   6. Only then, plan and apply, one confirmed plan file at a time: bootstrap,
 #      cluster phase 1, the Grafana secret and kubeconfig, cluster phase 2, with the
 #      weights uploading in the background (ADR 0037, ADR 0059).
@@ -38,6 +41,12 @@ set -euo pipefail
 require_cmd aws jq terraform git
 
 MIN_WINDOW_HOURS=0.25
+# With APPROVED_AT, a window whose approval ends sooner than this is not opened: the
+# cluster alone takes longer than that to come up, and a timer that fires mid-apply
+# leaves the teardown racing the kill Lambda.
+MIN_MINUTES_LEFT=15
+# Clock skew allowed between the approval's timestamp and this machine.
+APPROVED_AT_SKEW_SECONDS=120
 
 # There is deliberately no MAX_WINDOW_HOURS constant here. The upper bound belongs to
 # the guardrails stack, which derives the sweeper's age threshold from it, and a copy
@@ -49,14 +58,17 @@ LIMITS_PARAMETER="/${NAME_PREFIX}/guardrails/limits"
 
 usage() {
   cat >&2 <<'USAGE'
-usage: mise run up WINDOW_ID=<n> WINDOW_HOURS=<h>
+usage: mise run up WINDOW_ID=<n> WINDOW_HOURS=<h> [APPROVED_AT=<yyyy-mm-ddThh:mm:ssZ>]
 
-Both come verbatim from the approval message, which has exactly this form and no
-other:
+WINDOW_ID and WINDOW_HOURS come verbatim from the approval message, which has
+exactly this form and no other:
 
     APPROVE CLOUD WINDOW <n>: <purpose>; max <hours>h; max $<amount>
 
 Nothing else counts as approval. Not "yes", not "go ahead", not "sounds good".
+
+APPROVED_AT is the UTC time the approval arrived. With it, the kill timer fires
+when the approval ends rather than WINDOW_HOURS after this command arms it.
 USAGE
 }
 
@@ -71,13 +83,15 @@ fi
 
 WINDOW_ID=""
 WINDOW_HOURS=""
+APPROVED_AT=""
 for pair in "$@"; do
   case "$pair" in
     WINDOW_ID=*)    WINDOW_ID="${pair#WINDOW_ID=}" ;;
     WINDOW_HOURS=*) WINDOW_HOURS="${pair#WINDOW_HOURS=}" ;;
+    APPROVED_AT=*)  APPROVED_AT="${pair#APPROVED_AT=}" ;;
     *)
       usage
-      die "unrecognised argument '$pair'. Only WINDOW_ID=<n> and WINDOW_HOURS=<h> are accepted."
+      die "unrecognised argument '$pair'. Only WINDOW_ID=<n>, WINDOW_HOURS=<h> and APPROVED_AT=<utc> are accepted."
       ;;
   esac
 done
@@ -103,7 +117,43 @@ fi
 WINDOW_MINUTES="$(awk -v h="$WINDOW_HOURS" 'BEGIN { printf "%d", (h * 60) + 0.5 }')"
 TIMER_NAME="${NAME_PREFIX}-window-${WINDOW_ID}"
 
+# utc_to_epoch <yyyy-mm-ddThh:mm:ss> and epoch_to_utc <seconds>: GNU date and BSD date
+# each do one form and not the other's, as in step 4 below.
+utc_to_epoch() {
+  date -u -d "${1/T/ }" '+%s' 2>/dev/null ||
+    date -j -u -f '%Y-%m-%dT%H:%M:%S' "$1" '+%s' 2>/dev/null
+}
+epoch_to_utc() {
+  date -u -d "@$1" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null ||
+    date -u -r "$1" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null
+}
+
+# APPROVED_AT is checked before anything else runs, so a late or mistyped approval time
+# costs nothing. FIRE_EPOCH stays empty without it, and step 4 falls back to now.
+FIRE_EPOCH=""
+if [ -n "$APPROVED_AT" ]; then
+  approved="${APPROVED_AT%Z}"
+  [[ "$approved" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] ||
+    die "APPROVED_AT must be UTC as yyyy-mm-ddThh:mm:ssZ; got '$APPROVED_AT'."
+  approved_epoch="$(utc_to_epoch "$approved")" ||
+    die "APPROVED_AT '$APPROVED_AT' is not a real time, or this date(1) cannot parse it."
+  now_epoch="$(date -u '+%s')"
+  if [ "$approved_epoch" -gt $((now_epoch + APPROVED_AT_SKEW_SECONDS)) ]; then
+    die "APPROVED_AT ${approved}Z is in the future. Copy the time the approval arrived, not the time it ends."
+  fi
+  FIRE_EPOCH=$((approved_epoch + WINDOW_MINUTES * 60))
+  minutes_left=$(((FIRE_EPOCH - now_epoch) / 60))
+  if [ "$minutes_left" -lt "$MIN_MINUTES_LEFT" ]; then
+    die "the approval ends at $(epoch_to_utc "$FIRE_EPOCH")Z, ${minutes_left} min from now, under the ${MIN_MINUTES_LEFT} min minimum. Nothing was done. A new approval message opens a new window."
+  fi
+fi
+
 heading "opening cloud window $WINDOW_ID — $WINDOW_HOURS h — region $WORK_REGION"
+if [ -n "$FIRE_EPOCH" ]; then
+  info "approved at ${APPROVED_AT%Z}Z; the approval and the kill timer end at $(epoch_to_utc "$FIRE_EPOCH")Z"
+else
+  warn "no APPROVED_AT: the kill timer will fire ${WINDOW_HOURS} h after it is armed, which is later than the approval ends by however long the pre-flight takes."
+fi
 
 # ------------------------------------------------------------------ 1. guardrails
 
@@ -319,7 +369,14 @@ else
   # `at(yyyy-mm-ddThh:mm:ss)` is the one-time schedule form. Both GNU and BSD date
   # can do the arithmetic; neither can do it the other's way.
   # https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html
-  if fire_at="$(date -u -d "+${WINDOW_MINUTES} minutes" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)"; then
+  if [ -n "$FIRE_EPOCH" ]; then
+    fire_at="$(epoch_to_utc "$FIRE_EPOCH")" ||
+      die "cannot format the fire time: this date(1) understands neither -d @ nor -r."
+    # Pre-flight and the guard-status run take minutes; re-check the margin at arming.
+    if [ $(((FIRE_EPOCH - $(date -u '+%s')) / 60)) -lt "$MIN_MINUTES_LEFT" ]; then
+      die "the approval ends at ${fire_at}Z, under ${MIN_MINUTES_LEFT} min from now. Nothing has been armed or applied."
+    fi
+  elif fire_at="$(date -u -d "+${WINDOW_MINUTES} minutes" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)"; then
     :
   elif fire_at="$(date -u -v "+${WINDOW_MINUTES}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)"; then
     :
