@@ -1,12 +1,15 @@
 # 0018. The boundary does not filter CreateFleet, and the kill path takes every instance
 
 Date: 2026-11-23
+Revised: 2026-11-24
 
 ## Status
 
-Accepted. Supersedes the `CreateFleet` half of `InstanceTypeWhitelist` and `InstancesMustCarryProjectTag`
-in ADR 0011, and the tag selection of instances in ADR 0015. ADR 0048 follows from it on the platform
-side.
+Accepted. Revised 2026-11-24 after the real fleet test: the whitelist still binds Karpenter, through
+`ec2:RunInstances`. See "Revised 2026-11-24" at the end; where it disagrees with the text above, it wins.
+
+Supersedes the `CreateFleet` half of `InstanceTypeWhitelist` and `InstancesMustCarryProjectTag` in ADR
+0011, and the tag selection of instances in ADR 0015. ADR 0048 follows from it on the platform side.
 
 ## Context
 
@@ -117,3 +120,42 @@ after the apply are the first real test of it.
   https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html
 - IAM quotas, 6,144 characters for a customer managed policy.
   https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html
+
+## Revised 2026-11-24
+
+The admin window applied this decision, then ran the test the record asked for. Both fleets were real, not
+dry runs: `create-fleet --type instant`, one Spot instance, as the operator, with a real launch template,
+`Project` and `Stack` on the instance and the volume.
+
+| Type | Whitelisted | Result |
+| --- | --- | --- |
+| `t3.nano` | no | refused: `UnauthorizedOperation` on `ec2:RunInstances`, `instance/*` |
+| `t3.medium` | yes | launched, both tags on the instance and on its volume, terminated 35 s later |
+
+The decoded `t3.nano` message matched `InstanceTypeWhitelist`, and its request context carried
+`ec2:InstanceType` = `t3.nano`, `ec2:InstanceMarketType` = `spot` and `ec2:LaunchTemplate` among 24 keys.
+So an instant fleet authorizes `RunInstances` for each instance it starts, as the caller, and that
+evaluation does carry the type. The `CreateFleet` evaluation above still carries neither the type nor the
+tags. Both statements are true; the first one is the one that counts.
+
+What changes:
+
+- A Karpenter launch of a type outside the whitelist is refused by IAM. The first paragraph of
+  Consequences is wrong. The NodePools and the quotas are a second layer, not the only one.
+- `InstancesMustCarryProjectTag` binds the fleet path too, through the same per-instance `RunInstances`.
+  It did not fire on either fleet, because both tagged their instances.
+- `NoProjectTagRepoint` let the fleet's create-time tags through. Karpenter's launch path is open with the
+  boundary as it now stands.
+- `create-fleet --dry-run` stops at the fleet's own evaluation. The drill's dry-run case for `m5.large`
+  reports allowed while the same fleet without `--dry-run` is refused. The drill keeps the case and says
+  so; the type filter on this path is drilled by the `RunInstances` launch matrix.
+- CloudTrail records a `CreateFleet` whose every instance was refused without an `errorCode`. The refusal
+  is in the response's `errors`. A search on `errorCode` does not find it.
+
+What does not change: `CreateFleet` stays out of both Denies, since with it in them every tagged fleet is
+refused before the per-instance check is reached. The kill path still selects every instance in the
+project's regions, whatever its tags.
+
+Evidence: `materials/guardrails/w0-reapply/` in the working notes, `step9-decoded.json`,
+`step9b-create-fleet-t3medium.json`, `step9b-instance.json`, `step9b-volume-tags.json`,
+`step10-cloudtrail-createfleet.json`.

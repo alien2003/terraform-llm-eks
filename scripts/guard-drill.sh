@@ -502,6 +502,9 @@ sim allowed eks:CreateCluster "*" \
 #     the cases tested a request that does not exist, and every Karpenter launch was
 #     refused while the drill was green (ADR 0018). The fleet path is drilled below,
 #     with create-fleet --dry-run, which is the only test whose context EC2 builds.
+#     A dry run stops at the fleet's own evaluation. A real instant fleet then
+#     authorizes ec2:RunInstances for each instance, with ec2:InstanceType and the
+#     request tags in the context, and the launch matrix above is what drills that.
 
 # --- the autoscaling narrowing. An Auto Scaling group does not launch instances as
 #     the principal that created or resized it: it launches through the service-linked
@@ -650,11 +653,16 @@ note "so nothing could launch even without --dry-run, and the drill needs no wri
 # mean IAM let the request through; UnauthorizedOperation means it did not, and the
 # decoded message names the statement. Anything else is inconclusive and fails.
 #
-# What these cases prove is that Karpenter's launch is not refused, tagged or not.
-# They do not prove a type filter, because there is none on this path: EC2 sends the
-# boundary no ec2:InstanceType for a fleet, and an untagged fleet's instance/* is not
-# evaluated at all. "not whitelisted" is expected ALLOWED for that reason, and the
-# types Karpenter may launch are held by the NodePools and the quotas (ADR 0018).
+# What these cases prove is that the CreateFleet evaluation itself does not refuse
+# Karpenter, tagged or not. EC2 sends that evaluation no ec2:InstanceType, so it
+# cannot filter a type, and "not whitelisted" is expected ALLOWED here.
+#
+# A dry run does not reach the second evaluation. A real instant fleet authorizes
+# ec2:RunInstances for every instance it starts, as the caller, with the type and the
+# tags in the context: on 2026-11-24 a real fleet of one t3.nano was refused by
+# InstanceTypeWhitelist and a tagged t3.medium launched (ADR 0018, Revised). So the
+# m5.large case passes here and the same fleet without --dry-run is refused. The type
+# filter on Karpenter's path is drilled by the launch matrix, not by this one.
 fleet() {
   local expected="$1" label="$2" instance_type="$3" tagged="$4"
 
@@ -717,7 +725,7 @@ fleet() {
 fleet allowed "GPU on Spot, g6.xlarge"          g6.xlarge  yes
 fleet allowed "GPU on Spot, g6.2xlarge"         g6.2xlarge yes
 # Karpenter's own fallback type, the one window 1's dry-run validation asked for.
-fleet allowed "not whitelisted, m5.large"       m5.large   yes
+fleet allowed "not whitelisted, m5.large, dry run only" m5.large yes
 fleet allowed "whitelisted but untagged"        t3.medium  no
 
 # ------------------------------------------------------------------ the kill path
