@@ -48,7 +48,7 @@ section, and it matters more than a flag usually would.
 ## Applying it
 
 ```sh
-mise run up WINDOW_ID=<n> WINDOW_HOURS=<h>
+mise run up WINDOW_ID=<n> WINDOW_HOURS=<h> APPROVED_AT=<utc>
 ```
 
 Never by hand, and never outside a cloud window. `mise run up` arms the one-shot kill timer before it

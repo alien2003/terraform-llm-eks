@@ -91,7 +91,7 @@ Inside a window the order is fixed and does not vary:
 mise run guard-status          every guardrail present and healthy, or the window does not open
 pre-flight                     profile, region, quotas, credit balance
 terraform plan                 and a stated estimate per hour, with and without the GPU node
-mise run up WINDOW_ID=n WINDOW_HOURS=h
+mise run up WINDOW_ID=n WINDOW_HOURS=h APPROVED_AT=t
 ...                            only the work written down in the window plan, nothing else
 mise run down
 mise run audit                 zero orphans
@@ -113,7 +113,7 @@ document.
 | `mise run auth <admin\|operator>` | Print the assumed-role ARN, or fail loudly |
 | `mise run guard-status` | Report every guardrail present and healthy |
 | `mise run guard-drill` | Drill the boundary: policy simulator plus a `run-instances --dry-run` matrix |
-| `mise run up WINDOW_ID=<n> WINDOW_HOURS=<h>` | Arm the one-shot kill timer, then apply |
+| `mise run up WINDOW_ID=<n> WINDOW_HOURS=<h> APPROVED_AT=<utc>` | Arm the one-shot kill timer for the end of the approval, then apply |
 | `mise run down` | Destroy, audit, then disarm the timer if the audit is clean |
 | `mise run audit` | Scan for orphaned project-tagged resources |
 | `mise run lint` | Every local check, with no cloud credentials |

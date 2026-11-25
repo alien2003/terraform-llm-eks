@@ -208,7 +208,7 @@ provider version or in the API, so the cache rules are found by their prefix ins
 Local state, so there is nothing to configure and nothing to migrate.
 
 ```sh
-mise run up WINDOW_ID=<n> WINDOW_HOURS=<h>
+mise run up WINDOW_ID=<n> WINDOW_HOURS=<h> APPROVED_AT=<utc>
 ```
 
 Never by hand, and never outside a cloud window. `mise run up` arms the one-shot kill timer before it

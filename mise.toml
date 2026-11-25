@@ -82,7 +82,7 @@ run = "scripts/guard-drill.sh"
 [tasks.up]
 description = "Open a cloud window: arm the one-shot kill timer, then apply. Requires WINDOW_ID and WINDOW_HOURS"
 usage = '''
-arg "<vars>" var=#true help="WINDOW_ID=<n> WINDOW_HOURS=<h>, taken verbatim from the approval message"
+arg "<vars>" var=#true help="WINDOW_ID=<n> WINDOW_HOURS=<h> from the approval message, and APPROVED_AT=<utc> when it arrived"
 '''
 run = "scripts/window-up.sh"
 
