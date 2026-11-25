@@ -78,10 +78,18 @@ orphan() { # orphan <region> <kind> <identifier> <detail>
 # with nothing billing (ADR 0060). So a tagging hit for an EC2 resource is checked
 # against the service's own describe call before it counts.
 #
-# Deliberately one-sided: only an error code ending in `.NotFound` makes a resource
-# gone. Success, `Malformed`, AccessDenied, throttling, a type not in the table: all
-# of these leave it an orphan, because a false orphan costs a re-run and a false
-# "gone" costs money.
+# An instance is the exception to NotFound. EC2 keeps describing a terminated instance
+# for a while, and later answers a describe by its ID with an empty result rather than
+# an error. So for an instance, the state `terminated` and an empty answer also count
+# as gone. In the window-0 re-apply (2026-11-24) the tagging API listed a terminated
+# t3.medium and its deleted volume for more than 70 minutes; a day later the same ID
+# came back empty. Live instances are caught by the state-filtered describe above,
+# whatever this returns.
+#
+# Deliberately one-sided: only an error code ending in `.NotFound` (or, for an instance,
+# `terminated` or an empty answer) makes a resource gone. Success, `Malformed`, AccessDenied,
+# throttling, a type not in the table: all of these leave it an orphan, because a
+# false orphan costs a re-run and a false "gone" costs money.
 # https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/API_GetResources.html
 # https://docs.aws.amazon.com/ec2/latest/devguide/errors-overview.html
 ec2_resource_gone() {
@@ -90,7 +98,18 @@ ec2_resource_gone() {
   resource="${arn##*:}"
   kind="${resource%%/*}"
   id="${resource#*/}"
+  if [ "$kind" = instance ]; then
+    local state
+    if state="$(aws_ro ec2 describe-instances --instance-ids "$id" --region "$region" \
+         --query 'Reservations[0].Instances[0].State.Name' --output text 2>&1)"; then
+      [ "$state" = terminated ] || [ "$state" = None ]
+      return
+    fi
+    [[ "$state" =~ \(InvalidInstanceID\.NotFound\) ]]
+    return
+  fi
   case "$kind" in
+    volume)            op=describe-volumes            flag=--volume-ids ;;
     security-group)    op=describe-security-groups    flag=--group-ids ;;
     network-interface) op=describe-network-interfaces flag=--network-interface-ids ;;
     subnet)            op=describe-subnets            flag=--subnet-ids ;;
@@ -410,8 +429,15 @@ for region in $REGIONS; do
           esac
           ;;
         *)
-          check FAIL "unattributed resource" "$arn has Project but no Stack tag"
-          orphan "$region" unattributed "${arn##*:}" "$arn"
+          if ec2_resource_gone "$region" "$arn"; then
+            check WARN "stale tagging entry" "$arn — the tagging API still lists it, EC2 says it is gone"
+          elif [ "$stack" = "-" ]; then
+            check FAIL "unattributed resource" "$arn has Project but no Stack tag"
+            orphan "$region" unattributed "${arn##*:}" "$arn"
+          else
+            check FAIL "unattributed resource" "$arn has Stack=$stack, which no stack in this repository sets"
+            orphan "$region" unattributed "${arn##*:}" "$arn"
+          fi
           ;;
       esac
     done <<<"$tagged"
