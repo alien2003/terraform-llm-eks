@@ -443,6 +443,13 @@ data "aws_iam_policy_document" "operator_boundary" {
   # "Running On-Demand G and VT instances" quota, held at a target of 0 in
   # var.quota_targets and re-checked by guard-status at window open, plus the
   # NodePool's own capacityTypes. ADR 0011 has the whole reasoning.
+  #
+  # Revised by observation (ADR 0018, Revised 2026-11-24): an instant fleet also
+  # authorizes ec2:RunInstances for each instance it starts, and that evaluation
+  # carries ec2:InstanceMarketType. So this statement does reach Karpenter's
+  # launches. Not yet tested with an on-demand GPU fleet. It is also why Karpenter's
+  # NodeClass validation must stay off: its dry run asks for g6 with no market type
+  # and is refused here (ADR 0062).
   statement {
     sid       = "GpuSpotOnly"
     effect    = "Deny"
