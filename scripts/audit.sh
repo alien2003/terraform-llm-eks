@@ -86,8 +86,18 @@ orphan() { # orphan <region> <kind> <identifier> <detail>
 # came back empty. Live instances are caught by the state-filtered describe above,
 # whatever this returns.
 #
+# Two record types never bill and outlive what they launched (window 1, attempt 3,
+# 2026-11-26: two Karpenter fleets and a Spot request held the audit dirty after the
+# destroy, with no instance left). A fleet counts as gone when it is deleted in any
+# form, or when it is `instant`: an instant fleet launches once and maintains nothing,
+# and whatever it launched is an instance, caught by the instance sweep above. A Spot
+# request counts as gone when it is closed, cancelled or failed; an open or active one
+# can still launch, so it stays an orphan. State values from the EC2 API reference
+# (DescribeFleets FleetState and Type, DescribeSpotInstanceRequests State).
+#
 # Deliberately one-sided: only an error code ending in `.NotFound` (or, for an instance,
-# `terminated` or an empty answer) makes a resource gone. Success, `Malformed`, AccessDenied,
+# `terminated` or an empty answer, or the fleet and Spot states above) makes a resource
+# gone. Success, `Malformed`, AccessDenied,
 # throttling, a type not in the table: all of these leave it an orphan, because a
 # false orphan costs a re-run and a false "gone" costs money.
 # https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/API_GetResources.html
@@ -106,6 +116,30 @@ ec2_resource_gone() {
       return
     fi
     [[ "$state" =~ \(InvalidInstanceID\.NotFound\) ]]
+    return
+  fi
+  if [ "$kind" = fleet ]; then
+    local fstate
+    if fstate="$(aws_ro ec2 describe-fleets --fleet-ids "$id" --region "$region" \
+         --query 'Fleets[0].[FleetState,Type]' --output text 2>&1)"; then
+      case "$fstate" in
+        deleted*|*instant) return 0 ;;
+        *) return 1 ;;
+      esac
+    fi
+    [[ "$fstate" =~ \(Invalid[A-Za-z]+\.NotFound\) ]]
+    return
+  fi
+  if [ "$kind" = spot-instances-request ]; then
+    local sstate
+    if sstate="$(aws_ro ec2 describe-spot-instance-requests --spot-instance-request-ids "$id" \
+         --region "$region" --query 'SpotInstanceRequests[0].State' --output text 2>&1)"; then
+      case "$sstate" in
+        closed|cancelled|failed) return 0 ;;
+        *) return 1 ;;
+      esac
+    fi
+    [[ "$sstate" =~ \(Invalid[A-Za-z]+\.NotFound\) ]]
     return
   fi
   case "$kind" in
@@ -420,7 +454,7 @@ for region in $REGIONS; do
               ;;
             *)
               if ec2_resource_gone "$region" "$arn"; then
-                check WARN "stale tagging entry" "$arn — the tagging API still lists it, EC2 answers NotFound"
+                check WARN "stale tagging entry" "$arn — the tagging API still lists it, EC2 says it is gone"
               else
                 check FAIL "cluster-stack leftover" "$arn"
                 orphan "$region" cluster-leftover "${arn##*:}" "$arn"

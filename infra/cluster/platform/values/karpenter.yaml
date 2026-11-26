@@ -32,10 +32,13 @@ settings:
   # is reclaimed with no drain, which for this project is the difference between a
   # graceful shutdown and a lost benchmark run.
   interruptionQueue: "${interruption_queue}"
-  # settings.disableDryRun is left at the chart default, false. The NodeClass
-  # validation's dry-run CreateFleet is the earliest place a boundary that refuses
-  # Karpenter shows up, as ValidationSucceeded=False before any pod is pending
-  # (ADR 0048, which reverses ADR 0047).
+  # Off. The NodeClass validation's dry-run RunInstances carries no market type, so
+  # EC2 reads it as on-demand, and for the GPU NodeClass it asks for g6.xlarge
+  # on-demand, which the boundary's GpuSpotOnly denies by design. Window 1, attempt
+  # 3, 2026-11-26: t3.medium passed, g6.xlarge was refused, ValidationSucceeded=False,
+  # NodePool not Ready. The real launch is Spot and is still decided by the same
+  # boundary (ADR 0062, which supersedes ADR 0048).
+  disableDryRun: true
 
 # Scraped by the kube-prometheus-stack Prometheus. The Prometheus is configured to
 # select ServiceMonitors from every namespace, so no extra label is needed here.

@@ -4,7 +4,7 @@ Date: 2026-11-23
 
 ## Status
 
-Accepted. Supersedes ADR 0047.
+Superseded by ADR 0062. Supersedes ADR 0047.
 
 ## Context
 

@@ -136,6 +136,10 @@ spec:
             - {{ .Values.model.maxNumSeqs | quote }}
             - --gpu-memory-utilization
             - {{ .Values.model.gpuMemoryUtilization | quote }}
+            {{- with .Values.model.cudagraphMode }}
+            - --compilation-config
+            - {{ dict "cudagraph_mode" . | toJson | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}

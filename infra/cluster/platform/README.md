@@ -439,7 +439,7 @@ Written down here rather than assumed, because none of them can be checked witho
    Karpenter's documentation says it does; this is the one tag path the money-safety nets depend on, so
    it gets checked against a real instance with `describe-instances` rather than trusted. `mise run
    audit` finding the node is the same check from the other end.
-8. Both EC2NodeClasses reach `ValidationSucceeded=True` with Karpenter's dry-run validation on
-   (ADR 0048). If one stays `False` with `CreateFleetAuthCheckFailed`, the boundary is refusing the
-   fleet again: decode the message in the NodeClass status with `sts decode-authorization-message`
-   before anything else. Save `kubectl describe nodeclaim` either way.
+8. Both EC2NodeClasses reach `ValidationSucceeded=True`. Karpenter's dry-run validation is off
+   (ADR 0062), so this says little about the boundary; the first real launch does. If a NodeClaim
+   carries `UnauthorizedOperation`, decode it with `sts decode-authorization-message` before anything
+   else. Save `kubectl describe nodeclaim` either way.

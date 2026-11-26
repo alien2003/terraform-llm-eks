@@ -26,6 +26,12 @@ model:
   maxLen: 8192
   gpuMemoryUtilization: "0.90"
   maxNumSeqs: 64
+  # Passed as --compilation-config '{"cudagraph_mode": ...}'. Empty leaves vLLM's
+  # default, FULL_AND_PIECEWISE. PIECEWISE because on an L4 (g6.2xlarge) vLLM
+  # 0.28.0 captured the 19 piecewise graphs in 1 s and then hung on the first full
+  # one until the startup probe killed it, six times (ADR 0063).
+  # https://docs.vllm.ai/en/stable/design/cuda_graphs/
+  cudagraphMode: PIECEWISE
 
 weights:
   # s3://<bucket>/<prefix>. Synced once per pod start by an init container using
