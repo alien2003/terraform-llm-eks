@@ -143,10 +143,10 @@
       "max_quantity": 2,
       "ceiling_source": "infra/cluster/platform inference_max_replicas 2, whose own description is 'One replica per GPU node'; gpu_nodepool_cpu_limit 8 holds the pool to the same two g6.xlarge",
       "gpu_only": true,
-      "usd_per_hour": 0.8388,
+      "usd_per_hour": 0.8407,
       "source_url": "aws ec2 describe-spot-price-history --region us-east-1 --instance-types g6.xlarge g6.2xlarge --product-descriptions Linux/UNIX --start-time <now minus 7 days>",
-      "sourced_on": "2026-11-19",
-      "note": "The highest Spot price either whitelisted GPU type reached in any us-east-1 AZ over the 7 days to 2026-11-19: g6.2xlarge in use1-az6 at 0.8388. g6.xlarge peaked at 0.7461 (use1-az5) and read 0.4169 to 0.7154 at the end of the period. Pricing every GPU node at the g6.2xlarge peak overstates the bill and never understates it, whichever type Karpenter picks. max_quantity 2 at this rate also overstates the true ceiling, since the 8 vCPU G and VT Spot quota allows two g6.xlarge or one g6.2xlarge, never two g6.2xlarge. Spot prices move; re-read before each window."
+      "sourced_on": "2026-11-27",
+      "note": "The highest Spot price either whitelisted GPU type reached in any us-east-1 AZ over the 7 days to 2026-11-27: g6.2xlarge in use1-az1 at 0.8407 (2026-11-27 05:00Z), which stopped window 1's fourth attempt at pre-flight because it was above the previous line, 0.8388 (use1-az6, 7 days to 2026-11-19). g6.xlarge peaked at 0.7497 (use1-az5). Pricing every GPU node at the g6.2xlarge peak overstates the bill and never understates it, whichever type Karpenter picks. max_quantity 2 at this rate also overstates the true ceiling, since the 8 vCPU G and VT Spot quota allows two g6.xlarge or one g6.2xlarge, never two g6.2xlarge. Spot prices move; re-read before each window."
     },
     "gpu_node_ebs": {
       "description": "Root volume for the GPU node, gp3, converted from the per GB month price",
