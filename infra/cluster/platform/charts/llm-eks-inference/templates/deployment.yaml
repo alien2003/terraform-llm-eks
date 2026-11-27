@@ -27,6 +27,14 @@ spec:
     spec:
       serviceAccountName: {{ .Values.serviceAccountName }}
       automountServiceAccountToken: true
+      # No service environment variables. The Service is named vllm, so Kubernetes
+      # would set VLLM_PORT=tcp://<cluster ip>:8000 in this pod, and vLLM reads
+      # VLLM_PORT as its own setting and exits on a URI (window 1, attempt 5,
+      # ADR 0064). vLLM's docs say not to name the Service vllm; turning the links off
+      # removes the whole class instead, and nothing here reads them.
+      # https://docs.vllm.ai/en/stable/configuration/env_vars/
+      # https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables
+      enableServiceLinks: false
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:

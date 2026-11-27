@@ -4,7 +4,7 @@ Date: 2026-11-26
 
 ## Status
 
-Accepted, unproven. The next window with a GPU node tests it.
+Accepted. Confirmed in window 1, attempt 5 (2026-11-27): see "Confirmed" at the end.
 
 ## Context
 
@@ -54,3 +54,14 @@ all) with the vLLM debug log on, inside the same window.
 - vLLM v0.28.0 source: `vllm/config/compilation.py`, `vllm/engine/arg_utils.py`.
   https://github.com/vllm-project/vllm/tree/v0.28.0
 - Evidence in the working notes: `materials/measurements/w1c-vllm-crash-log.txt`.
+
+## Confirmed
+
+Window 1, attempt 5, 2026-11-27, same image, same model, a Spot `g6.2xlarge` again. With
+`cudagraph_mode` `PIECEWISE` the log read `Capturing CUDA graphs (PIECEWISE): 19/19`, then
+`Graph capturing finished in 2 secs, took 0.12 GiB`, then `init engine (profile, create kv cache, warmup
+model) took 25.55 s`. No full-graph capture was attempted and nothing hung. The KV cache came out at
+4.39 GiB, 82,224 tokens, against 5.17 GiB without the piecewise graphs' memory.
+
+vLLM still did not serve that day, for an unrelated reason (ADR 0064). Evidence:
+`materials/measurements/w1e-vllm-log-prev.txt` in the working notes.

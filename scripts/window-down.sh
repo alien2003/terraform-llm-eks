@@ -55,6 +55,40 @@ else
   warn "opened with 'mise run up'. Destroying and auditing anyway, which is harmless."
 fi
 
+# delete_leaked_cni_enis — remove network interfaces the VPC CNI created on a node
+# that is gone, in the cluster stack's VPC only, before the network is destroyed.
+#
+# Window 1, attempt 5 (2026-11-27): Karpenter terminated the GPU node during the
+# platform destroy, and one secondary ENI the CNI had created for it stayed behind,
+# status `available`, description `aws-K8S-<instance id>`. It held a private subnet
+# and the node security group, so the network destroy failed with DependencyViolation
+# and the window closed only after the ENI was deleted by hand.
+#
+# Narrow on purpose: status `available` (attached to nothing), description starting
+# `aws-K8S-` (the CNI's own naming), inside the VPC tagged Project and Stack=cluster.
+# Anything else in the VPC is left for Terraform and the audit to report.
+# https://docs.aws.amazon.com/eks/latest/userguide/managing-vpc-cni.html
+delete_leaked_cni_enis() {
+  local vpcs vpc enis eni
+  vpcs="$(aws_ro ec2 describe-vpcs --region "$WORK_REGION" \
+    --filters "Name=tag:Project,Values=$PROJECT_TAG" "Name=tag:Stack,Values=cluster" \
+    --query 'Vpcs[].VpcId' --output text 2>/dev/null || true)"
+  for vpc in $vpcs; do
+    enis="$(aws_ro ec2 describe-network-interfaces --region "$WORK_REGION" \
+      --filters "Name=vpc-id,Values=$vpc" "Name=status,Values=available" \
+                "Name=description,Values=aws-K8S-*" \
+      --query 'NetworkInterfaces[].NetworkInterfaceId' --output text 2>/dev/null || true)"
+    for eni in $enis; do
+      if aws_write ec2 delete-network-interface --network-interface-id "$eni" \
+           --region "$WORK_REGION" >/dev/null; then
+        check PASS "leaked CNI interface" "$eni deleted from $vpc"
+      else
+        warn "could not delete $eni in $vpc; the network destroy may fail on it."
+      fi
+    done
+  done
+}
+
 # ------------------------------------------------------------------ 1. destroy
 
 info ""
@@ -148,7 +182,20 @@ for stack in $DESTROY_STACKS; do
     fi
   fi
 
+  if [ "$stack" = "infra/cluster" ]; then
+    delete_leaked_cni_enis
+  fi
+
   if ! terraform -chdir="$dir" destroy "${destroy_args[@]}"; then
+    # The managed node group's nodes terminate inside this destroy, and the CNI can
+    # leak an interface for them too. One cleanup and one retry, no more.
+    if [ "$stack" = "infra/cluster" ]; then
+      warn "terraform destroy failed in $stack; removing leaked CNI interfaces and trying once more."
+      delete_leaked_cni_enis
+      if terraform -chdir="$dir" destroy "${destroy_args[@]}"; then
+        continue
+      fi
+    fi
     error "terraform destroy failed in $stack."
     destroy_failed=1
   fi
